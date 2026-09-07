@@ -8,19 +8,32 @@ export default function NewSessionPage() {
   const router = useRouter();
   const [goal, setGoal] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!goal.trim()) return;
 
     setLoading(true);
+    setError(null);
+
     try {
-      // TODO: POST /api/sessions
-      // For now just navigate to a placeholder session
-      console.log('Creating session with goal:', goal);
-      router.push('/sessions');
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal: goal.trim() }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create session');
+      }
+
+      // Navigate to the new session detail page
+      router.push(`/sessions/${data.session.id}`);
     } catch (err) {
-      console.error(err);
+      setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
       setLoading(false);
     }
@@ -58,8 +71,15 @@ export default function NewSessionPage() {
               placeholder="e.g. Research the top 5 AI agent frameworks in 2026 and summarize their strengths..."
               className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               required
+              disabled={loading}
             />
           </div>
+
+          {error && (
+            <div className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {error}
+            </div>
+          )}
 
           <div className="flex gap-3">
             <button
@@ -67,7 +87,7 @@ export default function NewSessionPage() {
               disabled={loading || !goal.trim()}
               className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-medium text-primary-foreground disabled:opacity-50"
             >
-              {loading ? 'Starting…' : 'Start Agent'}
+              {loading ? 'Creating…' : 'Start Agent'}
             </button>
             <Link
               href="/sessions"
