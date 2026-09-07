@@ -1,0 +1,243 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── User & Auth ────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions      Session[]
+  agents        Agent[]
+  projects      Project[]
+
+  @@map("users")
+}
+
+// ─── Agent ──────────────────────────────────────────────────────
+
+model Agent {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  config      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@index([userId])
+  @@map("agents")
+}
+
+// ─── Session ────────────────────────────────────────────────────
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  agentId   String?
+  goal      String
+  status    String   @default("idle") // AgentStatus
+  plan      Json?
+  result    Json?
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent    Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  messages Message[]
+  tasks    Task[]
+  toolCalls ToolCall[]
+  approvals Approval[]
+  events   AgentEvent[]
+  logs     ExecutionLog[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("sessions")
+}
+
+// ─── Message ────────────────────────────────────────────────────
+
+model Message {
+  id        String   @id @default(cuid())
+  sessionId String
+  role      String   // user | assistant | system
+  content   String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("messages")
+}
+
+// ─── Task ───────────────────────────────────────────────────────
+
+model Task {
+  id                   String   @id @default(cuid())
+  sessionId            String
+  title                String
+  description          String?
+  status               String   @default("pending") // TaskStatus
+  priority             String   @default("medium")
+  tools                String[] @default([])
+  verificationCriteria String[] @default([])
+  result               Json?
+  error                String?
+  retryCount           Int      @default(0)
+  maxRetries           Int      @default(3)
+  sortOrder            Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  session      Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  dependencies TaskDependency[]  @relation("dependent")
+  dependents   TaskDependency[]  @relation("dependency")
+  toolCalls    ToolCall[]
+
+  @@index([sessionId])
+  @@index([status])
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id           String @id @default(cuid())
+  taskId       String // the task that depends on another
+  dependsOnId  String // the prerequisite task
+
+  task      Task @relation("dependent", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn Task @relation("dependency", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnId])
+  @@index([taskId])
+  @@index([dependsOnId])
+  @@map("task_dependencies")
+}
+
+// ─── Tool Call & Result ─────────────────────────────────────────
+
+model ToolCall {
+  id        String   @id @default(cuid())
+  sessionId String
+  taskId    String?
+  toolName  String
+  input     Json
+  status    String   @default("pending") // pending | running | completed | failed
+  output    Json?
+  error     String?
+  durationMs Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  task    Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId])
+  @@index([taskId])
+  @@index([toolName])
+  @@map("tool_calls")
+}
+
+// ─── Approval ───────────────────────────────────────────────────
+
+model Approval {
+  id          String   @id @default(cuid())
+  sessionId   String
+  action      String
+  riskLevel   String   // low | medium | high
+  explanation String
+  status      String   @default("pending") // pending | approved | rejected | expired
+  decidedAt   DateTime?
+  decidedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([status])
+  @@map("approvals")
+}
+
+// ─── Agent Event (live UI / audit) ───────────────────────────────
+
+model AgentEvent {
+  id        String   @id @default(cuid())
+  sessionId String
+  type      String   // status | tool_call | tool_result | task_started | ...
+  data      Json
+  createdAt DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("agent_events")
+}
+
+// ─── Execution Log ──────────────────────────────────────────────
+
+model ExecutionLog {
+  id         String   @id @default(cuid())
+  sessionId  String
+  level      String   // info | warn | error
+  message    String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("execution_logs")
+}
+
+// ─── Memory (V1: simple, semantic later) ────────────────────────
+
+model Memory {
+  id        String   @id @default(cuid())
+  userId    String?
+  sessionId String?
+  type      String   // working | episodic | semantic
+  content   String
+  metadata  Json?
+  importance Float   @default(0.5)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([type])
+  @@map("memories")
+}
+
+// ─── Project (optional grouping) ────────────────────────────────
+
+model Project {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("projects")
+}
