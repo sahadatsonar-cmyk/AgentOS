@@ -1,0 +1,26 @@
+{
+  "name": "agent-os",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Production-oriented autonomous AI Agent platform",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "prettier --write .",
+    "db:generate": "turbo run db:generate --filter=@agent-os/database",
+    "db:push": "turbo run db:push --filter=@agent-os/database",
+    "db:studio": "turbo run db:studio --filter=@agent-os/database"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "turbo": "^2.1.0",
+    "typescript": "^5.5.4"
+  },
+  "packageManager": "pnpm@9.10.0",
+  "engines": {
+    "node": ">=20"
+  }
+}
