@@ -74,9 +74,9 @@ EXECUTING → FAILED → RETRYING → EXECUTING
 ## Tech Stack
 
 **Frontend**
-- Next.js 15 (App Router)
+- Next.js (App Router)
 - TypeScript
-- Tailwind CSS + shadcn/ui
+- Tailwind CSS + shadcn/ui-ready
 - Zustand + TanStack Query
 
 **Backend (MVP)**
@@ -93,69 +93,57 @@ EXECUTING → FAILED → RETRYING → EXECUTING
 
 ---
 
-## Monorepo Structure (Start Simple)
+## Monorepo Structure
 
 ```
 AgentOS/
 ├── apps/
-│   └── web/                  # Next.js app
+│   └── web/                  # Next.js app (dashboard + sessions UI)
 ├── packages/
-│   ├── agent-core/           # Orchestrator, Planner, State, Types
-│   ├── ai/                   # LLM providers + router
-│   ├── tools/                # Tool implementations
+│   ├── agent-core/           # Orchestrator, Planner, State Machine
 │   ├── database/             # Prisma schema + client
-│   └── shared/               # Zod schemas, utils, constants
+│   └── shared/               # Zod schemas, domain types
 ├── docs/
-├── scripts/
 ├── package.json
 ├── turbo.json
 └── README.md
 ```
 
-We start with a **minimal** package set. More packages only when needed.
-
 ---
 
-## Development Phases (Realistic)
+## Development Phases
 
-### Phase 0 – Bootstrap (Day 1)
+### Phase 0 – Bootstrap ✅
 - Monorepo (pnpm + Turborepo)
 - TypeScript strict
-- ESLint + Prettier
-- Basic Next.js app + Tailwind + shadcn
+- Shared types + Agent core skeleton
+- State machine with validated transitions
 
-### Phase 1 – Foundation (Day 2–4)
-- Prisma schema (User, Session, Message, Plan, Task, ToolCall, Approval, AgentEvent)
-- Auth
-- Dashboard skeleton
-- Create / list sessions
+### Phase 1 – Foundation (in progress)
+- ✅ Prisma schema (User, Session, Task, ToolCall, Approval, AgentEvent, Memory…)
+- ✅ Next.js app scaffold + Tailwind
+- ✅ Dashboard home + Sessions list + New Task UI
+- [ ] Auth
+- [ ] API routes for sessions
+- [ ] Wire create session → DB
 
-### Phase 2 – Agent Core (Day 5–9)
-- Agent state machine
-- Planner (goal → tasks)
-- Orchestrator loop
-- LLM provider interface + one real provider
+### Phase 2 – Agent Core
+- Real LLM-backed planner
+- Full orchestrator loop
 - Prompt composition
 
-### Phase 3 – Tools + Execution (Day 10–14)
-- Tool interface + permission check
+### Phase 3 – Tools + Execution
 - calculator, datetime, web_search, web_fetch
-- Tool execution + observation
-- Basic retry
-- Live status updates
+- Tool manager + permissions
+- Basic retry + live status
 
-### Phase 4 – Memory + Polish (Day 15–18)
+### Phase 4 – Memory + Polish
 - Working + Episodic memory
 - Approval UI
-- Better error handling
 - Audit logs
 
-### Phase 5+ (Later)
-- Redis + BullMQ
-- Semantic memory (pgvector)
-- Full recovery + replan
-- Coding tools + sandbox
-- Multi-agent
+### Phase 5+
+- Redis + BullMQ, Semantic memory, Coding agent, Multi-agent
 
 ---
 
@@ -172,20 +160,34 @@ We start with a **minimal** package set. More packages only when needed.
 
 ---
 
-## Getting Started (Coming Soon)
+## Getting Started
 
 ```bash
+git clone https://github.com/sahadatsonar-cmyk/AgentOS.git
+cd AgentOS
 pnpm install
+
+# Copy env and set DATABASE_URL
+cp .env.example .env
+
+# Generate Prisma client & push schema (needs running Postgres)
+pnpm db:generate
+pnpm db:push
+
+# Run the web app
 pnpm dev
 ```
+
+Open http://localhost:3000
 
 ---
 
 ## Status
 
 - [x] Repository created
-- [ ] Phase 0 – Project bootstrap
-- [ ] Phase 1 – Foundation
+- [x] Phase 0 – Project bootstrap
+- [x] Phase 1 – Prisma schema + Next.js UI scaffold
+- [ ] Phase 1 – Auth + Session API
 - [ ] Phase 2 – Agent Core
 - [ ] Phase 3 – Tools
 - [ ] Phase 4 – Memory & Polish
