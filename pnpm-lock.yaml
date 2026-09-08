@@ -98,11 +98,19 @@ importers:
   packages/database:
     dependencies:
       '@prisma/client':
+<<<<<<< HEAD
         specifier: ^5.22.0
         version: 5.22.0(prisma@5.22.0)
     devDependencies:
       prisma:
         specifier: ^5.22.0
+=======
+        specifier: ^5.19.0
+        version: 5.22.0(prisma@5.22.0)
+    devDependencies:
+      prisma:
+        specifier: ^5.19.0
+>>>>>>> 069581accd8a34f824bb520e7128b80ed61a5d5e
         version: 5.22.0
       typescript:
         specifier: ^5.5.4
@@ -117,6 +125,7 @@ importers:
       typescript:
         specifier: ^5.5.4
         version: 5.9.3
+<<<<<<< HEAD
 
 packages:
 
@@ -1263,3 +1272,5 @@ snapshots:
     optionalDependencies:
       '@types/react': 18.3.31
       react: 18.3.1
+=======
+>>>>>>> 069581accd8a34f824bb520e7128b80ed61a5d5e
