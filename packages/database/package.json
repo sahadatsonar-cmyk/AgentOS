@@ -12,17 +12,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-<<<<<<< HEAD
     "@prisma/client": "^5.22.0"
   },
   "devDependencies": {
     "prisma": "^5.22.0",
-=======
-    "@prisma/client": "^5.19.0"
-  },
-  "devDependencies": {
-    "prisma": "^5.19.0",
->>>>>>> 069581accd8a34f824bb520e7128b80ed61a5d5e
     "typescript": "^5.5.4"
   }
 }
