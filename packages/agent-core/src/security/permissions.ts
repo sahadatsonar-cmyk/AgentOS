@@ -10,9 +10,6 @@ export type ToolSecurityProfile = {
   description: string;
 };
 
-/**
- * Central registry of tool risk / permission metadata.
- */
 export const TOOL_SECURITY: Record<string, ToolSecurityProfile> = {
   calculator: {
     name: 'calculator',
@@ -42,12 +39,47 @@ export const TOOL_SECURITY: Record<string, ToolSecurityProfile> = {
     requiresApproval: true,
     description: 'Fetch arbitrary public URL content',
   },
+  code_analyze: {
+    name: 'code_analyze',
+    permissions: ['read'],
+    riskLevel: 'low',
+    requiresApproval: false,
+    description: 'Static code analysis only',
+  },
+  propose_patch: {
+    name: 'propose_patch',
+    permissions: ['read'],
+    riskLevel: 'medium',
+    requiresApproval: false,
+    description: 'Propose file change plan (does not write)',
+  },
+  github_get_file: {
+    name: 'github_get_file',
+    permissions: ['network', 'read'],
+    riskLevel: 'medium',
+    requiresApproval: false,
+    description: 'Read file from GitHub repo',
+  },
+  github_list_dir: {
+    name: 'github_list_dir',
+    permissions: ['network', 'read'],
+    riskLevel: 'medium',
+    requiresApproval: false,
+    description: 'List GitHub repo directory',
+  },
+  shell: {
+    name: 'shell',
+    permissions: ['execute'],
+    riskLevel: 'high',
+    requiresApproval: true,
+    description: 'Restricted shell (disabled on serverless)',
+  },
   code: {
     name: 'code',
     permissions: ['execute', 'write'],
     riskLevel: 'high',
     requiresApproval: true,
-    description: 'Code execution / modification (Phase 8)',
+    description: 'Legacy coding tool alias',
   },
 };
 
@@ -63,9 +95,6 @@ export function getToolSecurity(toolName: string): ToolSecurityProfile {
   );
 }
 
-/**
- * When AGENTOS_REQUIRE_APPROVAL=true, high-risk tools need an approved Approval row.
- */
 export function approvalsEnforced(): boolean {
   return process.env.AGENTOS_REQUIRE_APPROVAL === 'true';
 }
