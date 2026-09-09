@@ -18,6 +18,37 @@ export class HeuristicPlanner implements Planner {
     const g = goal.toLowerCase();
     const tasks: Plan['tasks'] = [];
 
+    // Math / calculator goals (check first)
+    const hasMathExpr = /[0-9]+\s*[+\-*/×÷%]\s*[0-9]+/.test(goal);
+    const isMathGoal =
+      hasMathExpr ||
+      /(calculat|compute|math|evaluate|what is\s+[0-9]|\d+\s*\+\s*\d+)/i.test(g);
+
+    if (isMathGoal) {
+      tasks.push({
+        id: 'T1',
+        title: 'Parse math expression',
+        description: `Extract expression from: "${truncate(goal, 120)}"`,
+        dependencies: [],
+        tools: [],
+      });
+      tasks.push({
+        id: 'T2',
+        title: 'Calculate result',
+        description: 'Evaluate the math expression using the calculator tool.',
+        dependencies: ['T1'],
+        tools: ['calculator'],
+      });
+      tasks.push({
+        id: 'T3',
+        title: 'Report answer',
+        description: 'Return the numeric result clearly.',
+        dependencies: ['T2'],
+        tools: [],
+      });
+      return { goal, tasks };
+    }
+
     // Always start with understanding
     tasks.push({
       id: 'T1',
@@ -48,6 +79,40 @@ export class HeuristicPlanner implements Planner {
         title: 'Write final summary',
         description: 'Produce a concise, useful answer the user can read immediately.',
         dependencies: ['T3'],
+        tools: [],
+      });
+    }
+    // Time / datetime goals
+    else if (/(time|date|timezone|clock|now|today|utc)/i.test(g)) {
+      tasks.push({
+        id: 'T2',
+        title: 'Get current date/time',
+        description: 'Use datetime tool to get current time.',
+        dependencies: ['T1'],
+        tools: ['datetime'],
+      });
+      tasks.push({
+        id: 'T3',
+        title: 'Report time',
+        description: 'Present the time clearly to the user.',
+        dependencies: ['T2'],
+        tools: [],
+      });
+    }
+    // URL fetch goals
+    else if (/https?:\/\//i.test(goal) || /(fetch|scrape|download page|read url)/i.test(g)) {
+      tasks.push({
+        id: 'T2',
+        title: 'Fetch URL content',
+        description: 'Download content from the given URL.',
+        dependencies: ['T1'],
+        tools: ['web_fetch'],
+      });
+      tasks.push({
+        id: 'T3',
+        title: 'Extract useful information',
+        description: 'Summarize or extract the relevant parts of the page.',
+        dependencies: ['T2'],
         tools: [],
       });
     }
