@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
@@ -10,6 +10,7 @@ type Task = {
   description: string | null;
   status: string;
   retryCount: number;
+  result?: unknown;
 };
 
 type AgentEvent = {
@@ -38,23 +39,43 @@ export default function SessionDetailPage() {
 
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch(`/api/sessions/${id}`);
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load');
-        setSession(data.session);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load session');
-      } finally {
-        setLoading(false);
-      }
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/sessions/${id}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load');
+      setSession(data.session);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load session');
+    } finally {
+      setLoading(false);
     }
-    load();
   }, [id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function handleRun() {
+    if (!session || running) return;
+    setRunning(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/sessions/${id}/run`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to run agent');
+      setSession(data.session);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Run failed');
+      await load();
+    } finally {
+      setRunning(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -64,7 +85,7 @@ export default function SessionDetailPage() {
     );
   }
 
-  if (error || !session) {
+  if (!session) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4">
         <p className="text-destructive">{error ?? 'Session not found'}</p>
@@ -74,6 +95,10 @@ export default function SessionDetailPage() {
       </div>
     );
   }
+
+  const canRun =
+    !running &&
+    (session.status === 'idle' || session.status === 'failed');
 
   return (
     <div className="min-h-screen bg-background">
@@ -92,7 +117,6 @@ export default function SessionDetailPage() {
       </header>
 
       <main className="container mx-auto max-w-4xl px-4 py-8">
-        {/* Goal + Status */}
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-bold leading-snug">{session.goal}</h1>
@@ -103,18 +127,44 @@ export default function SessionDetailPage() {
           <StatusBadge status={session.status} />
         </div>
 
-        {session.error && (
+        {(error || session.error) && (
           <div className="mt-4 rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {session.error}
+            {error || session.error}
           </div>
         )}
+
+        {/* Run controls */}
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={!canRun}
+            className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          >
+            {running
+              ? 'Running…'
+              : session.status === 'completed'
+                ? 'Completed'
+                : 'Run Agent'}
+          </button>
+          <button
+            type="button"
+            onClick={() => load()}
+            className="inline-flex h-10 items-center justify-center rounded-md border border-input px-4 text-sm font-medium"
+          >
+            Refresh
+          </button>
+          {running && (
+            <span className="text-sm text-muted-foreground">Planning & executing tasks…</span>
+          )}
+        </div>
 
         {/* Tasks */}
         <section className="mt-10">
           <h2 className="text-lg font-semibold">Tasks</h2>
           {session.tasks.length === 0 ? (
             <p className="mt-3 text-sm text-muted-foreground">
-              No tasks yet. Agent will create a plan when you run it (Phase 2).
+              No tasks yet. Click <strong>Run Agent</strong> to create a plan.
             </p>
           ) : (
             <ul className="mt-3 space-y-2">
@@ -137,6 +187,16 @@ export default function SessionDetailPage() {
           )}
         </section>
 
+        {/* Final result */}
+        {session.result != null && (
+          <section className="mt-10">
+            <h2 className="text-lg font-semibold">Result</h2>
+            <pre className="mt-3 overflow-x-auto rounded-md border bg-muted/40 p-4 text-xs">
+              {JSON.stringify(session.result, null, 2)}
+            </pre>
+          </section>
+        )}
+
         {/* Events */}
         <section className="mt-10">
           <h2 className="text-lg font-semibold">Activity</h2>
@@ -153,7 +213,7 @@ export default function SessionDetailPage() {
                     {new Date(ev.createdAt).toLocaleTimeString()}
                   </span>
                   <span className="font-medium">{ev.type}</span>
-                  <span className="text-muted-foreground">
+                  <span className="break-all text-muted-foreground">
                     {typeof ev.data === 'object' && ev.data !== null
                       ? JSON.stringify(ev.data)
                       : String(ev.data)}
@@ -163,19 +223,6 @@ export default function SessionDetailPage() {
             </ul>
           )}
         </section>
-
-        {/* Run button placeholder */}
-        <div className="mt-10 rounded-lg border border-dashed p-6 text-center">
-          <p className="text-sm text-muted-foreground">
-            Agent execution (Plan → Execute → Verify) comes in Phase 2.
-          </p>
-          <button
-            disabled
-            className="mt-3 inline-flex h-10 items-center justify-center rounded-md bg-primary/50 px-6 text-sm font-medium text-primary-foreground opacity-60"
-          >
-            Run Agent (coming soon)
-          </button>
-        </div>
       </main>
     </div>
   );
