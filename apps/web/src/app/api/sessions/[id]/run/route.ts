@@ -23,7 +23,6 @@ function pickToolInput(
       if (urlMatch) {
         return { url: urlMatch[0], maxBytes: 80_000 };
       }
-      // Fallback: search instead if no URL in goal
       return null;
     }
 
@@ -148,8 +147,13 @@ export async function POST(_req: NextRequest, { params }: Params) {
         },
       });
 
-      const toolResults: Array<{ tool: string; ok: boolean; data?: unknown; error?: string; durationMs: number }> =
-        [];
+      const toolResults: Array<{
+        tool: string;
+        ok: boolean;
+        data?: unknown;
+        error?: string;
+        durationMs: number;
+      }> = [];
 
       for (const toolName of task.tools) {
         let input = pickToolInput(toolName, session.goal, task.title, task.description);
@@ -272,7 +276,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         }
       }
 
-      // If no tools on task, still produce a structured note
+      const taskFailed = toolResults.some((r) => !r.ok);
       const result =
         toolResults.length > 0
           ? { tools: toolResults }
@@ -280,8 +284,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
               note: 'No tools assigned; reasoning-only step',
               summary: `Completed step: ${task.title}`,
             };
-
-      const taskFailed = toolResults.some((r) => !r.ok);
 
       await prisma.task.update({
         where: { id: task.id },
