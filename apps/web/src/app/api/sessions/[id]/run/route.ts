@@ -161,57 +161,12 @@ export async function POST(_req: NextRequest, { params }: Params) {
       for (const toolName of task.tools) {
         let input = pickToolInput(toolName, session.goal, task.title, task.description);
 
-        if (toolName === 'web_fetch' && input === null) {
+        // web_fetch without URL → fall back to web_search
+        const resolvedToolName =
+          toolName === 'web_fetch' && input === null ? 'web_search' : toolName;
+
+        if (resolvedToolName === 'web_search' && toolName === 'web_fetch') {
           input = pickToolInput('web_search', session.goal, task.title, task.description);
-          const searchResult = await toolRegistry.execute('web_search', input, {
-            sessionId,
-            taskId: task.id,
-          });
-
-          const toolCall = await prisma.toolCall.create({
-            data: {
-              sessionId,
-              taskId: task.id,
-              toolName: 'web_search',
-              input: toJson(input ?? {}),
-              status: searchResult.ok ? 'completed' : 'failed',
-              output: searchResult.ok ? toJson(searchResult.data) : undefined,
-              error: searchResult.error,
-              durationMs: searchResult.durationMs,
-            },
-          });
-
-          await prisma.agentEvent.create({
-            data: {
-              sessionId,
-              type: 'tool_call',
-              data: toJson({ toolCallId: toolCall.id, tool: 'web_search', input }),
-            },
-          });
-          await prisma.agentEvent.create({
-            data: {
-              sessionId,
-              type: 'tool_result',
-              data: toJson({
-                toolCallId: toolCall.id,
-                tool: 'web_search',
-                ok: searchResult.ok,
-                durationMs: searchResult.durationMs,
-              }),
-            },
-          });
-
-          toolResults.push({
-            tool: 'web_search',
-            ok: searchResult.ok,
-            data: searchResult.data,
-            error: searchResult.error,
-            durationMs: searchResult.durationMs,
-          });
-          if (searchResult.ok) {
-            toolOutputs.push({ taskId: task.id, tool: 'web_search', result: searchResult.data });
-          }
-          continue;
         }
 
         if (input === null) {
@@ -224,7 +179,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
           continue;
         }
 
-        const toolResult = await toolRegistry.execute(toolName, input, {
+        const toolResult = await toolRegistry.execute(resolvedToolName, input, {
           sessionId,
           taskId: task.id,
         });
@@ -233,11 +188,11 @@ export async function POST(_req: NextRequest, { params }: Params) {
           data: {
             sessionId,
             taskId: task.id,
-            toolName,
+            toolName: resolvedToolName,
             input: toJson(input),
             status: toolResult.ok ? 'completed' : 'failed',
             output: toolResult.ok ? toJson(toolResult.data) : undefined,
-            error: toolResult.error,
+            error: toolResult.error ?? null,
             durationMs: toolResult.durationMs,
           },
         });
@@ -246,7 +201,11 @@ export async function POST(_req: NextRequest, { params }: Params) {
           data: {
             sessionId,
             type: 'tool_call',
-            data: toJson({ toolCallId: toolCall.id, tool: toolName, input }),
+            data: toJson({
+              toolCallId: toolCall.id,
+              tool: resolvedToolName,
+              input,
+            }),
           },
         });
         await prisma.agentEvent.create({
@@ -255,7 +214,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
             type: 'tool_result',
             data: toJson({
               toolCallId: toolCall.id,
-              tool: toolName,
+              tool: resolvedToolName,
               ok: toolResult.ok,
               durationMs: toolResult.durationMs,
               preview: toolResult.ok
@@ -266,7 +225,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         });
 
         toolResults.push({
-          tool: toolName,
+          tool: resolvedToolName,
           ok: toolResult.ok,
           data: toolResult.data,
           error: toolResult.error,
@@ -274,7 +233,11 @@ export async function POST(_req: NextRequest, { params }: Params) {
         });
 
         if (toolResult.ok) {
-          toolOutputs.push({ taskId: task.id, tool: toolName, result: toolResult.data });
+          toolOutputs.push({
+            taskId: task.id,
+            tool: resolvedToolName,
+            result: toolResult.data,
+          });
         }
       }
 
