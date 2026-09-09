@@ -4,44 +4,44 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 230 25% 98%;
+    --foreground: 230 30% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-    --radius: 0.5rem;
+    --card-foreground: 230 30% 10%;
+    --primary: 248 75% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 20% 96%;
+    --secondary-foreground: 230 30% 15%;
+    --muted: 240 15% 95%;
+    --muted-foreground: 230 10% 42%;
+    --accent: 260 80% 96%;
+    --accent-foreground: 248 60% 35%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 230 18% 90%;
+    --input: 230 18% 90%;
+    --ring: 248 75% 55%;
+    --radius: 0.75rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --background: 235 28% 7%;
+    --foreground: 230 20% 96%;
+    --card: 235 24% 10%;
+    --card-foreground: 230 20% 96%;
+    --primary: 250 90% 68%;
+    --primary-foreground: 235 30% 10%;
+    --secondary: 235 20% 16%;
+    --secondary-foreground: 230 20% 96%;
+    --muted: 235 18% 14%;
+    --muted-foreground: 230 12% 65%;
+    --accent: 250 30% 18%;
+    --accent-foreground: 250 90% 80%;
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 235 16% 18%;
+    --input: 235 16% 18%;
+    --ring: 250 90% 68%;
   }
 }
 
@@ -49,7 +49,47 @@
   * {
     @apply border-border;
   }
+  html {
+    @apply antialiased;
+  }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground min-h-screen;
+  }
+}
+
+@layer utilities {
+  .bg-mesh {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(ellipse 80% 60% at 20% -10%, hsl(248 80% 70% / 0.28), transparent 55%),
+      radial-gradient(ellipse 70% 50% at 90% 10%, hsl(280 70% 65% / 0.18), transparent 50%),
+      radial-gradient(ellipse 60% 40% at 50% 100%, hsl(200 80% 60% / 0.12), transparent 55%);
+  }
+
+  .bg-grid {
+    background-size: 40px 40px;
+    background-image:
+      linear-gradient(to right, hsl(var(--foreground) / 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--foreground) / 0.04) 1px, transparent 1px);
+  }
+
+  .glass {
+    @apply border border-white/40 bg-white/70 shadow-sm backdrop-blur-xl;
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-500 bg-clip-text text-transparent;
+  }
+
+  .btn-primary {
+    @apply inline-flex h-11 items-center justify-center rounded-xl bg-primary px-6 text-sm font-semibold text-primary-foreground shadow-lg shadow-indigo-500/25 transition hover:bg-primary/90 hover:shadow-indigo-500/35 disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex h-11 items-center justify-center rounded-xl border border-border bg-white/70 px-6 text-sm font-medium shadow-sm backdrop-blur transition hover:bg-white disabled:opacity-50;
+  }
+
+  .card-soft {
+    @apply rounded-2xl border border-border/80 bg-card/90 p-6 shadow-sm shadow-indigo-500/5 backdrop-blur;
   }
 }
