@@ -1,12 +1,15 @@
 import { z } from 'zod';
 import type { ToolDefinition } from './types';
 
-const WebSearchInput = z.object({
+const WebSearchInputSchema = z.object({
   query: z.string().min(1).max(300).describe('Search query'),
-  maxResults: z.number().int().min(1).max(10).optional().default(5),
+  maxResults: z.number().int().min(1).max(10).optional(),
 });
 
-type WebSearchInput = z.infer<typeof WebSearchInput>;
+type WebSearchInput = {
+  query: string;
+  maxResults?: number;
+};
 
 export type SearchResultItem = {
   title: string;
@@ -16,18 +19,22 @@ export type SearchResultItem = {
 
 /**
  * Web search using DuckDuckGo Instant Answer API (no API key).
- * Returns Abstract + RelatedTopics when available.
- * Note: coverage is limited vs full SERP APIs; Phase 3+ can swap in SerpAPI etc.
  */
 export const webSearchTool: ToolDefinition<
   WebSearchInput,
-  { query: string; abstract: string | null; abstractURL: string | null; results: SearchResultItem[] }
+  {
+    query: string;
+    abstract: string | null;
+    abstractURL: string | null;
+    results: SearchResultItem[];
+  }
 > = {
   name: 'web_search',
-  description: 'Search the web (DuckDuckGo Instant Answer). Good for facts and topic overviews.',
+  description:
+    'Search the web (DuckDuckGo Instant Answer). Good for facts and topic overviews.',
   version: '1.0.0',
   permissions: ['network', 'read'],
-  inputSchema: WebSearchInput,
+  inputSchema: WebSearchInputSchema,
   async execute(input) {
     const maxResults = input.maxResults ?? 5;
     const url = new URL('https://api.duckduckgo.com/');
