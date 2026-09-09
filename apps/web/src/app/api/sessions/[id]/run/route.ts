@@ -14,6 +14,7 @@ import {
   formatAuditMessage,
 } from '@agent-os/agent-core';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
+import { pickToolInput } from '@/lib/pick-tool-input';
 
 type Params = { params: { id: string } };
 
@@ -22,55 +23,6 @@ const MAX_TOOL_RETRIES = 2;
 
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
-}
-
-function pickToolInput(
-  toolName: string,
-  goal: string,
-  taskTitle: string,
-  taskDescription: string | null,
-): Record<string, unknown> | null {
-  const text = `${goal}\n${taskTitle}\n${taskDescription || ''}`;
-
-  switch (toolName) {
-    case 'web_search':
-      return { query: goal.slice(0, 300), maxResults: 5 };
-
-    case 'web_fetch': {
-      const urlMatch = text.match(/https?:\/\/[^\s"']+/i);
-      if (urlMatch) {
-        return { url: urlMatch[0], maxBytes: 80_000 };
-      }
-      return null;
-    }
-
-    case 'calculator': {
-      const patterns = [
-        /(?:calculate|compute|math|evaluate)\s*([0-9()\s+\-*/.%×÷]+)/i,
-        /([0-9]+(?:\s*[+\-*/%×÷]\s*[0-9.]+)+)/,
-        /([0-9()\s+\-*/.%]{3,})/,
-      ];
-      for (const re of patterns) {
-        const m = goal.match(re) || text.match(re);
-        if (m?.[1]) {
-          const expression = m[1]
-            .replace(/×/g, '*')
-            .replace(/÷/g, '/')
-            .trim();
-          if (/[0-9]/.test(expression) && /[+\-*/%]/.test(expression)) {
-            return { expression };
-          }
-        }
-      }
-      return null;
-    }
-
-    case 'datetime':
-      return { timezone: 'UTC' };
-
-    default:
-      return {};
-  }
 }
 
 function extractAnswerPreview(toolName: string, data: unknown): string | null {
@@ -89,6 +41,18 @@ function extractAnswerPreview(toolName: string, data: unknown): string | null {
   }
   if (toolName === 'datetime' && typeof d.localeString === 'string') {
     return d.localeString;
+  }
+  if (toolName === 'code_analyze' && typeof d.summary === 'string') {
+    return d.summary;
+  }
+  if (toolName === 'propose_patch' && Array.isArray(d.plan)) {
+    return (d.plan as string[]).join(' → ');
+  }
+  if (toolName === 'github_list_dir' && Array.isArray(d.entries)) {
+    return `Listed ${(d.entries as unknown[]).length} entries`;
+  }
+  if (toolName === 'shell' && typeof d.note === 'string') {
+    return d.note;
   }
   return null;
 }
@@ -110,7 +74,6 @@ async function ensureToolApproved(opts: {
 
   const profile = getToolSecurity(opts.toolName);
 
-  // Look for an existing approved approval for this action
   const approved = await prisma.approval.findFirst({
     where: {
       sessionId: opts.sessionId,
@@ -124,7 +87,6 @@ async function ensureToolApproved(opts: {
     return { allowed: true };
   }
 
-  // Create pending approval if none
   const existingPending = await prisma.approval.findFirst({
     where: {
       sessionId: opts.sessionId,
@@ -313,7 +275,7 @@ async function executeToolWithRetry(opts: {
 
 /**
  * POST /api/sessions/:id/run
- * Phase 7: + permissions / approval gate / audit logs
+ * Phase 8: coding tools + security + retries + verify + answer
  */
 export async function POST(req: NextRequest, { params }: Params) {
   const sessionId = params.id;
@@ -587,7 +549,6 @@ export async function POST(req: NextRequest, { params }: Params) {
       });
     }
 
-    // verification
     await prisma.session.update({
       where: { id: sessionId },
       data: { status: 'verifying' },
