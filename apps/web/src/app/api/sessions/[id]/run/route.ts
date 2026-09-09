@@ -1,14 +1,53 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@agent-os/database';
-import { HeuristicPlanner } from '@agent-os/agent-core';
+import { HeuristicPlanner, createDefaultToolRegistry } from '@agent-os/agent-core';
 
 type Params = { params: { id: string } };
 
+const toolRegistry = createDefaultToolRegistry();
+
+function pickToolInput(
+  toolName: string,
+  goal: string,
+  taskTitle: string,
+  taskDescription: string | null,
+): unknown {
+  const text = `${goal}\n${taskTitle}\n${taskDescription || ''}`;
+
+  switch (toolName) {
+    case 'web_search':
+      return { query: goal.slice(0, 300), maxResults: 5 };
+
+    case 'web_fetch': {
+      const urlMatch = text.match(/https?:\/\/[^\s"']+/i);
+      if (urlMatch) {
+        return { url: urlMatch[0], maxBytes: 80_000 };
+      }
+      // Fallback: search instead if no URL in goal
+      return null;
+    }
+
+    case 'calculator': {
+      const exprMatch = text.match(
+        /(?:calculate|compute|math)?\s*([0-9()+\-*/.\s%]{3,})/i,
+      );
+      if (exprMatch) {
+        return { expression: exprMatch[1].trim() };
+      }
+      return null;
+    }
+
+    case 'datetime':
+      return { timezone: 'UTC' };
+
+    default:
+      return {};
+  }
+}
+
 /**
  * POST /api/sessions/:id/run
- * Phase 2: create a plan, write tasks to DB, advance status.
- * V1 execution is sequential stub (tasks marked completed after plan).
- * Real tool execution comes in Phase 3.
+ * Phase 3: plan + execute with real tools when assigned.
  */
 export async function POST(_req: NextRequest, { params }: Params) {
   const sessionId = params.id;
@@ -30,7 +69,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
       );
     }
 
-    // Already has a plan — re-run not supported yet
     if (session.tasks.length > 0 && session.status !== 'idle' && session.status !== 'failed') {
       return NextResponse.json(
         { error: 'Session already has a plan. Re-run will be added later.' },
@@ -54,12 +92,10 @@ export async function POST(_req: NextRequest, { params }: Params) {
     const planner = new HeuristicPlanner();
     const plan = await planner.createPlan(session.goal);
 
-    // Clear any previous failed tasks
     if (session.tasks.length > 0) {
       await prisma.task.deleteMany({ where: { sessionId } });
     }
 
-    // Persist tasks
     await prisma.task.createMany({
       data: plan.tasks.map((t, index) => ({
         sessionId,
@@ -86,15 +122,18 @@ export async function POST(_req: NextRequest, { params }: Params) {
           status: 'executing',
           message: `Plan ready with ${plan.tasks.length} tasks`,
           taskCount: plan.tasks.length,
+          availableTools: toolRegistry.names(),
         },
       },
     });
 
-    // ── execute (Phase 2 stub: mark each task completed) ──────
+    // ── execute with tools ────────────────────────────────────
     const dbTasks = await prisma.task.findMany({
       where: { sessionId },
       orderBy: { sortOrder: 'asc' },
     });
+
+    const toolOutputs: Array<{ taskId: string; tool: string; result: unknown }> = [];
 
     for (const task of dbTasks) {
       await prisma.task.update({
@@ -105,39 +144,183 @@ export async function POST(_req: NextRequest, { params }: Params) {
         data: {
           sessionId,
           type: 'task_started',
-          data: { taskId: task.id, title: task.title },
+          data: { taskId: task.id, title: task.title, tools: task.tools },
         },
       });
 
-      // Stub result until real tools (Phase 3)
-      const result = {
-        note: 'Phase 2 stub execution',
-        summary: `Completed step: ${task.title}`,
-        goal: session.goal,
-      };
+      const toolResults: Array<{ tool: string; ok: boolean; data?: unknown; error?: string; durationMs: number }> =
+        [];
+
+      for (const toolName of task.tools) {
+        let input = pickToolInput(toolName, session.goal, task.title, task.description);
+
+        // If web_fetch had no URL, fall back to web_search
+        if (toolName === 'web_fetch' && input === null) {
+          input = pickToolInput('web_search', session.goal, task.title, task.description);
+          const searchResult = await toolRegistry.execute('web_search', input, {
+            sessionId,
+            taskId: task.id,
+          });
+
+          const toolCall = await prisma.toolCall.create({
+            data: {
+              sessionId,
+              taskId: task.id,
+              toolName: 'web_search',
+              input: (input ?? {}) as object,
+              status: searchResult.ok ? 'completed' : 'failed',
+              output: searchResult.ok ? (searchResult.data as object) : undefined,
+              error: searchResult.error,
+              durationMs: searchResult.durationMs,
+            },
+          });
+
+          await prisma.agentEvent.create({
+            data: {
+              sessionId,
+              type: 'tool_call',
+              data: { toolCallId: toolCall.id, tool: 'web_search', input },
+            },
+          });
+          await prisma.agentEvent.create({
+            data: {
+              sessionId,
+              type: 'tool_result',
+              data: {
+                toolCallId: toolCall.id,
+                tool: 'web_search',
+                ok: searchResult.ok,
+                durationMs: searchResult.durationMs,
+              },
+            },
+          });
+
+          toolResults.push({
+            tool: 'web_search',
+            ok: searchResult.ok,
+            data: searchResult.data,
+            error: searchResult.error,
+            durationMs: searchResult.durationMs,
+          });
+          if (searchResult.ok) {
+            toolOutputs.push({ taskId: task.id, tool: 'web_search', result: searchResult.data });
+          }
+          continue;
+        }
+
+        if (input === null) {
+          toolResults.push({
+            tool: toolName,
+            ok: false,
+            error: `Could not derive input for tool ${toolName} from goal/task`,
+            durationMs: 0,
+          });
+          continue;
+        }
+
+        const toolResult = await toolRegistry.execute(toolName, input, {
+          sessionId,
+          taskId: task.id,
+        });
+
+        const toolCall = await prisma.toolCall.create({
+          data: {
+            sessionId,
+            taskId: task.id,
+            toolName,
+            input: (input ?? {}) as object,
+            status: toolResult.ok ? 'completed' : 'failed',
+            output: toolResult.ok ? (toolResult.data as object) : undefined,
+            error: toolResult.error,
+            durationMs: toolResult.durationMs,
+          },
+        });
+
+        await prisma.agentEvent.create({
+          data: {
+            sessionId,
+            type: 'tool_call',
+            data: { toolCallId: toolCall.id, tool: toolName, input },
+          },
+        });
+        await prisma.agentEvent.create({
+          data: {
+            sessionId,
+            type: 'tool_result',
+            data: {
+              toolCallId: toolCall.id,
+              tool: toolName,
+              ok: toolResult.ok,
+              durationMs: toolResult.durationMs,
+              preview: toolResult.ok
+                ? JSON.stringify(toolResult.data).slice(0, 500)
+                : toolResult.error,
+            },
+          },
+        });
+
+        toolResults.push({
+          tool: toolName,
+          ok: toolResult.ok,
+          data: toolResult.data,
+          error: toolResult.error,
+          durationMs: toolResult.durationMs,
+        });
+
+        if (toolResult.ok) {
+          toolOutputs.push({ taskId: task.id, tool: toolName, result: toolResult.data });
+        }
+      }
+
+      // If no tools on task, still produce a structured note
+      const result =
+        toolResults.length > 0
+          ? { tools: toolResults }
+          : {
+              note: 'No tools assigned; reasoning-only step',
+              summary: `Completed step: ${task.title}`,
+            };
+
+      const taskFailed = toolResults.some((r) => !r.ok);
 
       await prisma.task.update({
         where: { id: task.id },
         data: {
-          status: 'completed',
+          status: taskFailed ? 'failed' : 'completed',
           result,
+          error: taskFailed
+            ? toolResults
+                .filter((r) => !r.ok)
+                .map((r) => `${r.tool}: ${r.error}`)
+                .join('; ')
+            : null,
         },
       });
       await prisma.agentEvent.create({
         data: {
           sessionId,
           type: 'task_completed',
-          data: { taskId: task.id, title: task.title },
+          data: {
+            taskId: task.id,
+            title: task.title,
+            ok: !taskFailed,
+            toolsUsed: toolResults.map((r) => r.tool),
+          },
         },
       });
     }
 
-    // ── done ──────────────────────────────────────────────────
     const finalResult = {
-      message: 'Plan executed (stub). Real tools land in Phase 3.',
+      message: 'Plan executed with Phase 3 tools where assigned.',
       goal: session.goal,
       taskCount: dbTasks.length,
       tasks: dbTasks.map((t) => t.title),
+      toolOutputs: toolOutputs.map((o) => ({
+        taskId: o.taskId,
+        tool: o.tool,
+        preview: JSON.stringify(o.result).slice(0, 400),
+      })),
+      availableTools: toolRegistry.names(),
     };
 
     await prisma.session.update({
@@ -192,7 +375,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         },
       });
     } catch {
-      // ignore secondary errors
+      // ignore
     }
 
     return NextResponse.json(
