@@ -9,7 +9,11 @@ import {
   verifyOutcome,
   suggestReplan,
   sleep,
+  toolNeedsApproval,
+  getToolSecurity,
+  formatAuditMessage,
 } from '@agent-os/agent-core';
+import { clientIp, rateLimit } from '@/lib/rate-limit';
 
 type Params = { params: { id: string } };
 
@@ -95,12 +99,100 @@ function toolSummaryLine(tool: string, data: unknown): string {
   return `[${tool}] ${JSON.stringify(data).slice(0, 280)}`;
 }
 
+async function ensureToolApproved(opts: {
+  sessionId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}): Promise<{ allowed: boolean; reason?: string }> {
+  if (!toolNeedsApproval(opts.toolName)) {
+    return { allowed: true };
+  }
+
+  const profile = getToolSecurity(opts.toolName);
+
+  // Look for an existing approved approval for this action
+  const approved = await prisma.approval.findFirst({
+    where: {
+      sessionId: opts.sessionId,
+      action: opts.toolName,
+      status: 'approved',
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (approved) {
+    return { allowed: true };
+  }
+
+  // Create pending approval if none
+  const existingPending = await prisma.approval.findFirst({
+    where: {
+      sessionId: opts.sessionId,
+      action: opts.toolName,
+      status: 'pending',
+    },
+  });
+
+  if (!existingPending) {
+    await prisma.approval.create({
+      data: {
+        sessionId: opts.sessionId,
+        action: opts.toolName,
+        riskLevel: profile.riskLevel,
+        explanation: `${profile.description}. Input: ${JSON.stringify(opts.input).slice(0, 200)}`,
+        status: 'pending',
+      },
+    });
+  }
+
+  await prisma.executionLog.create({
+    data: {
+      sessionId: opts.sessionId,
+      level: 'warn',
+      message: formatAuditMessage('approval_required', opts.toolName),
+      metadata: toJson({ tool: opts.toolName, risk: profile.riskLevel }),
+    },
+  });
+
+  await prisma.agentEvent.create({
+    data: {
+      sessionId: opts.sessionId,
+      type: 'status',
+      data: toJson({
+        status: 'awaiting_approval',
+        message: `Approval required for high-risk tool: ${opts.toolName}`,
+        tool: opts.toolName,
+      }),
+    },
+  });
+
+  return {
+    allowed: false,
+    reason: `Approval required for ${opts.toolName}. POST /api/sessions/${opts.sessionId}/approvals with decision=approved.`,
+  };
+}
+
 async function executeToolWithRetry(opts: {
   sessionId: string;
   taskId: string;
   toolName: string;
   input: Record<string, unknown>;
 }): Promise<{ ok: boolean; data?: unknown; error?: string; durationMs: number; attempts: number }> {
+  const gate = await ensureToolApproved({
+    sessionId: opts.sessionId,
+    toolName: opts.toolName,
+    input: opts.input,
+  });
+
+  if (!gate.allowed) {
+    return {
+      ok: false,
+      error: gate.reason,
+      durationMs: 0,
+      attempts: 0,
+    };
+  }
+
   let attempt = 0;
   let lastError: string | undefined;
   let lastDuration = 0;
@@ -123,6 +215,22 @@ async function executeToolWithRetry(opts: {
         output: toolResult.ok ? toJson(toolResult.data) : undefined,
         error: toolResult.error ?? null,
         durationMs: toolResult.durationMs,
+      },
+    });
+
+    await prisma.executionLog.create({
+      data: {
+        sessionId: opts.sessionId,
+        level: toolResult.ok ? 'info' : 'warn',
+        message: formatAuditMessage(
+          toolResult.ok ? 'tool_ok' : 'tool_fail',
+          `${opts.toolName} attempt ${attempt + 1}`,
+        ),
+        metadata: toJson({
+          tool: opts.toolName,
+          ok: toolResult.ok,
+          durationMs: toolResult.durationMs,
+        }),
       },
     });
 
@@ -205,12 +313,25 @@ async function executeToolWithRetry(opts: {
 
 /**
  * POST /api/sessions/:id/run
- * Phase 6: plan + tools + retries + verify + final answer + memory.
+ * Phase 7: + permissions / approval gate / audit logs
  */
-export async function POST(_req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest, { params }: Params) {
   const sessionId = params.id;
 
   try {
+    const ip = clientIp(req);
+    const rl = rateLimit({
+      key: `run:${ip}`,
+      limit: 10,
+      windowMs: 60_000,
+    });
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded for agent runs' },
+        { status: 429 },
+      );
+    }
+
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
       include: { tasks: true },
@@ -224,9 +345,9 @@ export async function POST(_req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Session was cancelled' }, { status: 400 });
     }
 
-    if (['planning', 'executing', 'analyzing'].includes(session.status)) {
+    if (['planning', 'executing', 'analyzing', 'awaiting_approval'].includes(session.status)) {
       return NextResponse.json(
-        { error: 'Session is already running' },
+        { error: 'Session is already running or awaiting approval' },
         { status: 409 },
       );
     }
@@ -256,6 +377,15 @@ export async function POST(_req: NextRequest, { params }: Params) {
         },
       });
     }
+
+    await prisma.executionLog.create({
+      data: {
+        sessionId,
+        level: 'info',
+        message: formatAuditMessage('run_started', session.goal.slice(0, 80)),
+        metadata: toJson({ ip }),
+      },
+    });
 
     await prisma.session.update({
       where: { id: sessionId },
@@ -316,6 +446,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
     const toolSummaries: string[] = [];
     const failedTools: string[] = [];
     let failedTaskCount = 0;
+    let blockedOnApproval = false;
 
     for (const task of dbTasks) {
       await prisma.task.update({
@@ -387,6 +518,9 @@ export async function POST(_req: NextRequest, { params }: Params) {
           if (preview) answerParts.push(preview);
         } else {
           failedTools.push(resolvedToolName);
+          if (toolResult.error?.includes('Approval required')) {
+            blockedOnApproval = true;
+          }
           await prisma.task.update({
             where: { id: task.id },
             data: { retryCount: { increment: toolResult.attempts || 1 } },
@@ -432,7 +566,28 @@ export async function POST(_req: NextRequest, { params }: Params) {
       });
     }
 
-    // ── Phase 6: verification ─────────────────────────────────
+    if (blockedOnApproval) {
+      await prisma.session.update({
+        where: { id: sessionId },
+        data: { status: 'awaiting_approval' },
+      });
+
+      const updated = await prisma.session.findUnique({
+        where: { id: sessionId },
+        include: {
+          tasks: { orderBy: { sortOrder: 'asc' } },
+          events: { orderBy: { createdAt: 'desc' }, take: 100 },
+          approvals: { where: { status: 'pending' } },
+        },
+      });
+
+      return NextResponse.json({
+        session: updated,
+        message: 'Paused for approval of high-risk tool(s). Approve then re-run.',
+      });
+    }
+
+    // verification
     await prisma.session.update({
       where: { id: sessionId },
       data: { status: 'verifying' },
@@ -465,7 +620,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
       },
     });
 
-    // Recovery / replan hint (logged; full auto-replan can expand later)
     const replan = suggestReplan({
       goal: session.goal,
       failedTools: [...new Set(failedTools)],
@@ -485,7 +639,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
         },
       });
 
-      // One recovery pass for math if calculator missing but expression present
       if (
         failedTools.includes('calculator') ||
         (/(calculat|[0-9]+\s*[+\-*/])/i.test(session.goal) &&
@@ -512,15 +665,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
         }
       }
     }
-
-    // ── Final answer ──────────────────────────────────────────
-    await prisma.agentEvent.create({
-      data: {
-        sessionId,
-        type: 'status',
-        data: toJson({ status: 'verifying', message: 'Writing final answer…' }),
-      },
-    });
 
     const finalAnswer = await generateFinalAnswer({
       goal: session.goal,
@@ -584,6 +728,16 @@ export async function POST(_req: NextRequest, { params }: Params) {
         result: toJson(finalResult),
       },
     });
+
+    await prisma.executionLog.create({
+      data: {
+        sessionId,
+        level: 'info',
+        message: formatAuditMessage('run_completed', finalAnswer.source),
+        metadata: toJson({ verification, failedTaskCount }),
+      },
+    });
+
     await prisma.agentEvent.create({
       data: {
         sessionId,
