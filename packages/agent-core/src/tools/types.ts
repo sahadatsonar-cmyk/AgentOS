@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 
 export type ToolPermission = 'read' | 'write' | 'execute' | 'network';
 
@@ -15,16 +15,13 @@ export interface ToolResult<T = unknown> {
   durationMs: number;
 }
 
-/**
- * TInput = parsed output type (after defaults).
- * inputSchema accepts Zod effects/defaults where _input may differ from output.
- */
 export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   name: string;
   description: string;
   version: string;
   permissions: ToolPermission[];
-  inputSchema: z.ZodType<TInput, z.ZodTypeDef, unknown>;
+  // ZodTypeAny avoids input/output mismatch with .optional().default()
+  inputSchema: z.ZodTypeAny;
   execute: (input: TInput, ctx: ToolContext) => Promise<TOutput>;
 }
 
