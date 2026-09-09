@@ -3,6 +3,9 @@ import { calculatorTool } from './calculator';
 import { datetimeTool } from './datetime';
 import { webFetchTool } from './web-fetch';
 import { webSearchTool } from './web-search';
+import { codeAnalyzeTool, proposePatchTool } from './code';
+import { githubGetFileTool, githubListDirTool } from './github';
+import { shellTool } from './shell';
 
 export class ToolRegistry {
   private tools = new Map<string, AnyTool>();
@@ -50,12 +53,17 @@ export class ToolRegistry {
   }
 }
 
-/** Default built-in tools for Phase 3 */
+/** Default built-in tools including Phase 8 coding agent tools */
 export function createDefaultToolRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(calculatorTool);
   registry.register(datetimeTool);
   registry.register(webFetchTool);
   registry.register(webSearchTool);
+  registry.register(codeAnalyzeTool);
+  registry.register(proposePatchTool);
+  registry.register(githubGetFileTool);
+  registry.register(githubListDirTool);
+  registry.register(shellTool);
   return registry;
 }
