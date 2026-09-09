@@ -32,7 +32,6 @@ function pickToolInput(
     }
 
     case 'calculator': {
-      // Prefer explicit expression patterns from the goal
       const patterns = [
         /(?:calculate|compute|math|evaluate)\s*([0-9()\s+\-*/.%×÷]+)/i,
         /([0-9]+(?:\s*[+\-*/%×÷]\s*[0-9.]+)+)/,
@@ -68,9 +67,12 @@ function extractAnswerPreview(toolName: string, data: unknown): string | null {
     return `Answer: ${d.result}`;
   }
   if (toolName === 'web_search') {
-    if (typeof d.abstract === 'string' && d.abstract) return d.abstract.slice(0, 300);
-    const results = d.results as Array<{ snippet?: string }> | undefined;
-    if (results?.[0]?.snippet) return results[0].snippet.slice(0, 300);
+    if (typeof d.abstract === 'string' && d.abstract) return d.abstract.slice(0, 400);
+    const results = d.results as Array<{ title?: string; snippet?: string }> | undefined;
+    if (results?.[0]?.snippet) {
+      const title = results[0].title ? `${results[0].title}: ` : '';
+      return `${title}${results[0].snippet}`.slice(0, 400);
+    }
   }
   if (toolName === 'datetime' && typeof d.localeString === 'string') {
     return d.localeString;
@@ -80,7 +82,7 @@ function extractAnswerPreview(toolName: string, data: unknown): string | null {
 
 /**
  * POST /api/sessions/:id/run
- * Phase 3: plan + execute with real tools when assigned.
+ * Plan + execute. Supports re-run for idle / failed / completed.
  */
 export async function POST(_req: NextRequest, { params }: Params) {
   const sessionId = params.id;
@@ -95,23 +97,40 @@ export async function POST(_req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     }
 
-    if (session.status === 'completed' || session.status === 'cancelled') {
+    if (session.status === 'cancelled') {
+      return NextResponse.json({ error: 'Session was cancelled' }, { status: 400 });
+    }
+
+    // Block concurrent runs
+    if (['planning', 'executing', 'analyzing'].includes(session.status)) {
       return NextResponse.json(
-        { error: `Session already ${session.status}` },
-        { status: 400 },
+        { error: 'Session is already running' },
+        { status: 409 },
       );
     }
 
-    if (session.tasks.length > 0 && session.status !== 'idle' && session.status !== 'failed') {
-      return NextResponse.json(
-        { error: 'Session already has a plan. Re-run will be added later.' },
-        { status: 400 },
-      );
+    const isRerun = session.status === 'completed' || session.status === 'failed';
+
+    // Reset previous run state for re-run
+    if (isRerun) {
+      await prisma.toolCall.deleteMany({ where: { sessionId } });
+      await prisma.task.deleteMany({ where: { sessionId } });
+      await prisma.session.update({
+        where: { id: sessionId },
+        data: { status: 'idle', plan: Prisma.DbNull, result: Prisma.DbNull, error: null },
+      });
+      await prisma.agentEvent.create({
+        data: {
+          sessionId,
+          type: 'status',
+          data: toJson({ status: 'idle', message: 'Re-run requested — previous plan cleared' }),
+        },
+      });
     }
 
     await prisma.session.update({
       where: { id: sessionId },
-      data: { status: 'planning' },
+      data: { status: 'planning', error: null },
     });
     await prisma.agentEvent.create({
       data: {
@@ -124,9 +143,8 @@ export async function POST(_req: NextRequest, { params }: Params) {
     const planner = new HeuristicPlanner();
     const plan = await planner.createPlan(session.goal);
 
-    if (session.tasks.length > 0) {
-      await prisma.task.deleteMany({ where: { sessionId } });
-    }
+    // Clear any leftover tasks (idle re-run path)
+    await prisma.task.deleteMany({ where: { sessionId } });
 
     await prisma.task.createMany({
       data: plan.tasks.map((t, index) => ({
@@ -272,7 +290,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
         }
       }
 
-      // Only hard-fail when a tool threw / returned ok:false — empty search is ok
       const taskFailed = toolResults.some((r) => !r.ok);
       const result =
         toolResults.length > 0
@@ -352,7 +369,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
       where: { id: sessionId },
       include: {
         tasks: { orderBy: { sortOrder: 'asc' } },
-        events: { orderBy: { createdAt: 'desc' }, take: 50 },
+        events: { orderBy: { createdAt: 'desc' }, take: 80 },
       },
     });
 
