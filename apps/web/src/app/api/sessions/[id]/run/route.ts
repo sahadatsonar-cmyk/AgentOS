@@ -32,11 +32,23 @@ function pickToolInput(
     }
 
     case 'calculator': {
-      const exprMatch = text.match(
-        /(?:calculate|compute|math)?\s*([0-9()+\-*/.\s%]{3,})/i,
-      );
-      if (exprMatch) {
-        return { expression: exprMatch[1].trim() };
+      // Prefer explicit expression patterns from the goal
+      const patterns = [
+        /(?:calculate|compute|math|evaluate)\s*([0-9()\s+\-*/.%×÷]+)/i,
+        /([0-9]+(?:\s*[+\-*/%×÷]\s*[0-9.]+)+)/,
+        /([0-9()\s+\-*/.%]{3,})/,
+      ];
+      for (const re of patterns) {
+        const m = goal.match(re) || text.match(re);
+        if (m?.[1]) {
+          const expression = m[1]
+            .replace(/×/g, '*')
+            .replace(/÷/g, '/')
+            .trim();
+          if (/[0-9]/.test(expression) && /[+\-*/%]/.test(expression)) {
+            return { expression };
+          }
+        }
       }
       return null;
     }
@@ -47,6 +59,23 @@ function pickToolInput(
     default:
       return {};
   }
+}
+
+function extractAnswerPreview(toolName: string, data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (toolName === 'calculator' && typeof d.result === 'number') {
+    return `Answer: ${d.result}`;
+  }
+  if (toolName === 'web_search') {
+    if (typeof d.abstract === 'string' && d.abstract) return d.abstract.slice(0, 300);
+    const results = d.results as Array<{ snippet?: string }> | undefined;
+    if (results?.[0]?.snippet) return results[0].snippet.slice(0, 300);
+  }
+  if (toolName === 'datetime' && typeof d.localeString === 'string') {
+    return d.localeString;
+  }
+  return null;
 }
 
 /**
@@ -136,6 +165,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
     });
 
     const toolOutputs: Array<{ taskId: string; tool: string; result: unknown }> = [];
+    const answerParts: string[] = [];
 
     for (const task of dbTasks) {
       await prisma.task.update({
@@ -237,9 +267,12 @@ export async function POST(_req: NextRequest, { params }: Params) {
             tool: resolvedToolName,
             result: toolResult.data,
           });
+          const preview = extractAnswerPreview(resolvedToolName, toolResult.data);
+          if (preview) answerParts.push(preview);
         }
       }
 
+      // Only hard-fail when a tool threw / returned ok:false — empty search is ok
       const taskFailed = toolResults.some((r) => !r.ok);
       const result =
         toolResults.length > 0
@@ -277,8 +310,12 @@ export async function POST(_req: NextRequest, { params }: Params) {
     }
 
     const finalResult = {
-      message: 'Plan executed with Phase 3 tools where assigned.',
+      message:
+        answerParts.length > 0
+          ? answerParts.join('\n\n')
+          : 'Plan executed with Phase 3 tools where assigned.',
       goal: session.goal,
+      answers: answerParts,
       taskCount: dbTasks.length,
       tasks: dbTasks.map((t) => t.title),
       toolOutputs: toolOutputs.map((o) => ({
