@@ -5,11 +5,16 @@ import {
   HeuristicPlanner,
   createDefaultToolRegistry,
   generateFinalAnswer,
+  decideRetry,
+  verifyOutcome,
+  suggestReplan,
+  sleep,
 } from '@agent-os/agent-core';
 
 type Params = { params: { id: string } };
 
 const toolRegistry = createDefaultToolRegistry();
+const MAX_TOOL_RETRIES = 2;
 
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
@@ -90,9 +95,117 @@ function toolSummaryLine(tool: string, data: unknown): string {
   return `[${tool}] ${JSON.stringify(data).slice(0, 280)}`;
 }
 
+async function executeToolWithRetry(opts: {
+  sessionId: string;
+  taskId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}): Promise<{ ok: boolean; data?: unknown; error?: string; durationMs: number; attempts: number }> {
+  let attempt = 0;
+  let lastError: string | undefined;
+  let lastDuration = 0;
+
+  while (attempt <= MAX_TOOL_RETRIES) {
+    const toolResult = await toolRegistry.execute(opts.toolName, opts.input, {
+      sessionId: opts.sessionId,
+      taskId: opts.taskId,
+    });
+
+    lastDuration = toolResult.durationMs;
+
+    await prisma.toolCall.create({
+      data: {
+        sessionId: opts.sessionId,
+        taskId: opts.taskId,
+        toolName: opts.toolName,
+        input: toJson(opts.input),
+        status: toolResult.ok ? 'completed' : 'failed',
+        output: toolResult.ok ? toJson(toolResult.data) : undefined,
+        error: toolResult.error ?? null,
+        durationMs: toolResult.durationMs,
+      },
+    });
+
+    await prisma.agentEvent.create({
+      data: {
+        sessionId: opts.sessionId,
+        type: 'tool_call',
+        data: toJson({
+          tool: opts.toolName,
+          input: opts.input,
+          attempt: attempt + 1,
+        }),
+      },
+    });
+    await prisma.agentEvent.create({
+      data: {
+        sessionId: opts.sessionId,
+        type: 'tool_result',
+        data: toJson({
+          tool: opts.toolName,
+          ok: toolResult.ok,
+          attempt: attempt + 1,
+          durationMs: toolResult.durationMs,
+          preview: toolResult.ok
+            ? JSON.stringify(toolResult.data).slice(0, 400)
+            : toolResult.error,
+        }),
+      },
+    });
+
+    if (toolResult.ok) {
+      return {
+        ok: true,
+        data: toolResult.data,
+        durationMs: toolResult.durationMs,
+        attempts: attempt + 1,
+      };
+    }
+
+    lastError = toolResult.error;
+    const decision = decideRetry({
+      retryCount: attempt,
+      maxRetries: MAX_TOOL_RETRIES,
+      error: toolResult.error,
+      toolName: opts.toolName,
+    });
+
+    await prisma.agentEvent.create({
+      data: {
+        sessionId: opts.sessionId,
+        type: 'retry',
+        data: toJson({
+          tool: opts.toolName,
+          decision,
+          attempt: attempt + 1,
+        }),
+      },
+    });
+
+    if (decision.action !== 'retry') {
+      return {
+        ok: false,
+        error: decision.reason,
+        durationMs: lastDuration,
+        attempts: attempt + 1,
+      };
+    }
+
+    await sleep(decision.delayMs);
+    attempt += 1;
+  }
+
+  return {
+    ok: false,
+    error: lastError || 'Exhausted retries',
+    durationMs: lastDuration,
+    attempts: attempt,
+  };
+}
+
 /**
  * POST /api/sessions/:id/run
- * Phase 4: plan + tools + LLM final answer + episodic memory.
+ * Phase 6: plan + tools + retries + verify + final answer + memory.
  */
 export async function POST(_req: NextRequest, { params }: Params) {
   const sessionId = params.id;
@@ -169,6 +282,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         status: 'pending',
         tools: t.tools ?? [],
         sortOrder: index,
+        maxRetries: MAX_TOOL_RETRIES,
       })),
     });
 
@@ -200,6 +314,8 @@ export async function POST(_req: NextRequest, { params }: Params) {
     const toolOutputs: Array<{ taskId: string; tool: string; result: unknown }> = [];
     const answerParts: string[] = [];
     const toolSummaries: string[] = [];
+    const failedTools: string[] = [];
+    let failedTaskCount = 0;
 
     for (const task of dbTasks) {
       await prisma.task.update({
@@ -220,6 +336,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         data?: unknown;
         error?: string;
         durationMs: number;
+        attempts?: number;
       }> = [];
 
       for (const toolName of task.tools) {
@@ -239,52 +356,15 @@ export async function POST(_req: NextRequest, { params }: Params) {
             error: `Could not derive input for tool ${toolName} from goal/task`,
             durationMs: 0,
           });
+          failedTools.push(toolName);
           continue;
         }
 
-        const toolResult = await toolRegistry.execute(resolvedToolName, input, {
+        const toolResult = await executeToolWithRetry({
           sessionId,
           taskId: task.id,
-        });
-
-        const toolCall = await prisma.toolCall.create({
-          data: {
-            sessionId,
-            taskId: task.id,
-            toolName: resolvedToolName,
-            input: toJson(input),
-            status: toolResult.ok ? 'completed' : 'failed',
-            output: toolResult.ok ? toJson(toolResult.data) : undefined,
-            error: toolResult.error ?? null,
-            durationMs: toolResult.durationMs,
-          },
-        });
-
-        await prisma.agentEvent.create({
-          data: {
-            sessionId,
-            type: 'tool_call',
-            data: toJson({
-              toolCallId: toolCall.id,
-              tool: resolvedToolName,
-              input,
-            }),
-          },
-        });
-        await prisma.agentEvent.create({
-          data: {
-            sessionId,
-            type: 'tool_result',
-            data: toJson({
-              toolCallId: toolCall.id,
-              tool: resolvedToolName,
-              ok: toolResult.ok,
-              durationMs: toolResult.durationMs,
-              preview: toolResult.ok
-                ? JSON.stringify(toolResult.data).slice(0, 500)
-                : toolResult.error,
-            }),
-          },
+          toolName: resolvedToolName,
+          input,
         });
 
         toolResults.push({
@@ -293,6 +373,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
           data: toolResult.data,
           error: toolResult.error,
           durationMs: toolResult.durationMs,
+          attempts: toolResult.attempts,
         });
 
         if (toolResult.ok) {
@@ -304,10 +385,18 @@ export async function POST(_req: NextRequest, { params }: Params) {
           toolSummaries.push(toolSummaryLine(resolvedToolName, toolResult.data));
           const preview = extractAnswerPreview(resolvedToolName, toolResult.data);
           if (preview) answerParts.push(preview);
+        } else {
+          failedTools.push(resolvedToolName);
+          await prisma.task.update({
+            where: { id: task.id },
+            data: { retryCount: { increment: toolResult.attempts || 1 } },
+          });
         }
       }
 
       const taskFailed = toolResults.some((r) => !r.ok);
+      if (taskFailed) failedTaskCount += 1;
+
       const result =
         toolResults.length > 0
           ? { tools: toolResults }
@@ -343,7 +432,88 @@ export async function POST(_req: NextRequest, { params }: Params) {
       });
     }
 
-    // ── Phase 4: final answer (LLM if key present) ─────────────
+    // ── Phase 6: verification ─────────────────────────────────
+    await prisma.session.update({
+      where: { id: sessionId },
+      data: { status: 'verifying' },
+    });
+    await prisma.agentEvent.create({
+      data: {
+        sessionId,
+        type: 'status',
+        data: toJson({ status: 'verifying', message: 'Verifying outcome…' }),
+      },
+    });
+
+    const verification = verifyOutcome({
+      goal: session.goal,
+      answers: answerParts,
+      toolSummaries,
+      failedTaskCount,
+      totalTasks: dbTasks.length,
+    });
+
+    await prisma.agentEvent.create({
+      data: {
+        sessionId,
+        type: 'status',
+        data: toJson({
+          status: 'verifying',
+          message: verification.ok ? 'Verification passed' : 'Verification weak',
+          verification,
+        }),
+      },
+    });
+
+    // Recovery / replan hint (logged; full auto-replan can expand later)
+    const replan = suggestReplan({
+      goal: session.goal,
+      failedTools: [...new Set(failedTools)],
+      verify: verification,
+    });
+
+    if (replan.shouldReplan) {
+      await prisma.agentEvent.create({
+        data: {
+          sessionId,
+          type: 'status',
+          data: toJson({
+            status: 'retrying',
+            message: `Recovery hint: ${replan.hint}`,
+            replan,
+          }),
+        },
+      });
+
+      // One recovery pass for math if calculator missing but expression present
+      if (
+        failedTools.includes('calculator') ||
+        (/(calculat|[0-9]+\s*[+\-*/])/i.test(session.goal) &&
+          !answerParts.some((a) => /\d/.test(a)))
+      ) {
+        const input = pickToolInput('calculator', session.goal, 'recovery', null);
+        if (input) {
+          const recovered = await executeToolWithRetry({
+            sessionId,
+            taskId: dbTasks[0]?.id || sessionId,
+            toolName: 'calculator',
+            input,
+          });
+          if (recovered.ok) {
+            toolOutputs.push({
+              taskId: 'recovery',
+              tool: 'calculator',
+              result: recovered.data,
+            });
+            toolSummaries.push(toolSummaryLine('calculator', recovered.data));
+            const preview = extractAnswerPreview('calculator', recovered.data);
+            if (preview) answerParts.push(preview);
+          }
+        }
+      }
+    }
+
+    // ── Final answer ──────────────────────────────────────────
     await prisma.agentEvent.create({
       data: {
         sessionId,
@@ -364,9 +534,12 @@ export async function POST(_req: NextRequest, { params }: Params) {
       answerSource: finalAnswer.source,
       llmProvider: finalAnswer.provider ?? null,
       llmModel: finalAnswer.model ?? null,
+      verification,
+      recovery: replan,
       goal: session.goal,
       answers: answerParts,
       taskCount: dbTasks.length,
+      failedTaskCount,
       tasks: dbTasks.map((t) => t.title),
       toolOutputs: toolOutputs.map((o) => ({
         taskId: o.taskId,
@@ -376,24 +549,23 @@ export async function POST(_req: NextRequest, { params }: Params) {
       availableTools: toolRegistry.names(),
     };
 
-    // Episodic memory — store summary for later retrieval
     await prisma.memory.create({
       data: {
         userId: session.userId,
         sessionId,
         type: 'episodic',
         content: finalAnswer.text.slice(0, 4000),
-        importance: 0.7,
+        importance: verification.ok ? 0.7 : 0.4,
         metadata: toJson({
           goal: session.goal,
           answerSource: finalAnswer.source,
+          verification,
           taskCount: dbTasks.length,
           toolsUsed: toolOutputs.map((o) => o.tool),
         }),
       },
     });
 
-    // Working memory — short goal ↔ answer pair
     await prisma.memory.create({
       data: {
         userId: session.userId,
@@ -401,7 +573,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         type: 'working',
         content: `Goal: ${session.goal}\nAnswer: ${finalAnswer.text.slice(0, 500)}`,
         importance: 0.5,
-        metadata: toJson({ kind: 'session_summary' }),
+        metadata: toJson({ kind: 'session_summary', verification }),
       },
     });
 
@@ -420,6 +592,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
           message: finalAnswer.text.slice(0, 500),
           source: finalAnswer.source,
           provider: finalAnswer.provider,
+          verification,
         }),
       },
     });
@@ -429,7 +602,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         type: 'status',
         data: toJson({
           status: 'completed',
-          message: `Agent finished (${finalAnswer.source})`,
+          message: `Agent finished (${finalAnswer.source}, verify=${verification.score.toFixed(2)})`,
         }),
       },
     });
@@ -438,7 +611,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
       where: { id: sessionId },
       include: {
         tasks: { orderBy: { sortOrder: 'asc' } },
-        events: { orderBy: { createdAt: 'desc' }, take: 80 },
+        events: { orderBy: { createdAt: 'desc' }, take: 100 },
       },
     });
 
