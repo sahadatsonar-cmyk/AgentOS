@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { SiteHeader } from '@/components/site-header';
 
 type Task = {
   id: string;
@@ -107,7 +108,6 @@ export default function SessionDetailPage() {
     });
 
     es.addEventListener('agent_event', () => {
-      // Refresh full session when new events arrive
       void load();
     });
 
@@ -142,7 +142,6 @@ export default function SessionDetailPage() {
       await load();
     } finally {
       setRunning(false);
-      // Keep stream briefly so final events flush, then reload
       setTimeout(() => {
         void load();
       }, 800);
@@ -184,25 +183,18 @@ export default function SessionDetailPage() {
   const events = showAllEvents ? session.events : session.events.slice(0, 12);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold">
-              A
-            </div>
-            <span className="text-xl font-semibold">AgentOS</span>
-          </Link>
+    <div className="min-h-screen">
+      <SiteHeader />
+
+      <main className="container mx-auto max-w-4xl px-4 py-8">
+        <div className="mb-4">
           <Link href="/sessions" className="text-sm text-muted-foreground hover:text-foreground">
             ← All sessions
           </Link>
         </div>
-      </header>
-
-      <main className="container mx-auto max-w-4xl px-4 py-8">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-xl font-bold leading-snug">{session.goal}</h1>
+            <h1 className="text-xl font-bold leading-snug tracking-tight sm:text-2xl">{session.goal}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Created {new Date(session.createdAt).toLocaleString()}
               {session.updatedAt !== session.createdAt && (
@@ -222,7 +214,7 @@ export default function SessionDetailPage() {
         </div>
 
         {(error || session.error) && (
-          <div className="mt-4 rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div className="mt-4 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {error || session.error}
           </div>
         )}
@@ -232,34 +224,27 @@ export default function SessionDetailPage() {
             type="button"
             onClick={handleRun}
             disabled={!canRun}
-            className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-medium text-primary-foreground disabled:opacity-50"
+            className="btn-primary disabled:opacity-50"
           >
             {runLabel}
           </button>
-          <button
-            type="button"
-            onClick={() => load()}
-            className="inline-flex h-10 items-center justify-center rounded-md border border-input px-4 text-sm font-medium"
-          >
+          <button type="button" onClick={() => load()} className="btn-secondary">
             Refresh
           </button>
-          <Link
-            href="/sessions/new"
-            className="inline-flex h-10 items-center justify-center rounded-md border border-input px-4 text-sm font-medium"
-          >
+          <Link href="/sessions/new" className="btn-secondary">
             New Task
           </Link>
           {running && (
-            <span className="text-sm text-muted-foreground animate-pulse">
+            <span className="animate-pulse text-sm text-muted-foreground">
               Planning & executing…
             </span>
           )}
         </div>
 
         {(primaryMessage || answers.length > 0) && session.status === 'completed' && (
-          <section className="mt-8 rounded-xl border bg-card p-5 shadow-sm">
+          <section className="card-soft mt-8">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-indigo-600/80">
                 Answer
               </h2>
               {result?.answerSource && (
@@ -284,7 +269,7 @@ export default function SessionDetailPage() {
 
         <section className="mt-10">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Tasks</h2>
+            <h2 className="text-lg font-semibold tracking-tight">Tasks</h2>
             <span className="text-xs text-muted-foreground">
               {session.tasks.filter((t) => t.status === 'completed').length}/
               {session.tasks.length} done
@@ -297,14 +282,17 @@ export default function SessionDetailPage() {
           ) : (
             <ul className="mt-3 space-y-2">
               {session.tasks.map((t, i) => (
-                <li key={t.id} className="rounded-md border px-4 py-3">
+                <li
+                  key={t.id}
+                  className="rounded-xl border border-border/80 bg-white/70 px-4 py-3 backdrop-blur"
+                >
                   <div className="flex items-start gap-3">
                     <span className="mt-0.5 text-xs text-muted-foreground">{i + 1}</span>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium">{t.title}</p>
                         {t.tools && t.tools.length > 0 && (
-                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                          <span className="rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-100">
                             {t.tools.join(', ')}
                           </span>
                         )}
@@ -326,10 +314,13 @@ export default function SessionDetailPage() {
 
         {result?.toolOutputs && result.toolOutputs.length > 0 && (
           <section className="mt-10">
-            <h2 className="text-lg font-semibold">Tool outputs</h2>
+            <h2 className="text-lg font-semibold tracking-tight">Tool outputs</h2>
             <ul className="mt-3 space-y-2">
               {result.toolOutputs.map((o, i) => (
-                <li key={i} className="rounded-md border px-4 py-3 text-sm">
+                <li
+                  key={i}
+                  className="rounded-xl border border-border/80 bg-white/70 px-4 py-3 text-sm backdrop-blur"
+                >
                   <span className="font-medium text-indigo-700">{o.tool}</span>
                   <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all text-xs text-muted-foreground">
                     {o.preview}
@@ -350,16 +341,16 @@ export default function SessionDetailPage() {
               {showRawResult ? '▾ Hide raw result' : '▸ Show raw result JSON'}
             </button>
             {showRawResult && (
-              <pre className="mt-2 overflow-x-auto rounded-md border bg-muted/40 p-4 text-xs">
+              <pre className="mt-2 overflow-x-auto rounded-xl border bg-white/70 p-4 text-xs backdrop-blur">
                 {JSON.stringify(session.result, null, 2)}
               </pre>
             )}
           </section>
         )}
 
-        <section className="mt-10">
+        <section className="mt-10 pb-12">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Activity</h2>
+            <h2 className="text-lg font-semibold tracking-tight">Activity</h2>
             {session.events.length > 12 && (
               <button
                 type="button"
@@ -377,7 +368,7 @@ export default function SessionDetailPage() {
               {events.map((ev) => (
                 <li
                   key={ev.id}
-                  className="flex items-start gap-3 rounded-md border px-3 py-2 text-sm"
+                  className="flex items-start gap-3 rounded-xl border border-border/70 bg-white/60 px-3 py-2 text-sm backdrop-blur"
                 >
                   <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                     {new Date(ev.createdAt).toLocaleTimeString()}
@@ -402,11 +393,13 @@ function StatusBadge({ status }: { status: string }) {
     pending: 'bg-slate-100 text-slate-700',
     analyzing: 'bg-blue-100 text-blue-700',
     planning: 'bg-indigo-100 text-indigo-700',
-    executing: 'bg-amber-100 text-amber-700',
-    running: 'bg-amber-100 text-amber-700',
-    completed: 'bg-green-100 text-green-700',
+    executing: 'bg-amber-100 text-amber-800',
+    running: 'bg-amber-100 text-amber-800',
+    verifying: 'bg-violet-100 text-violet-800',
+    completed: 'bg-emerald-100 text-emerald-800',
     failed: 'bg-red-100 text-red-700',
     cancelled: 'bg-gray-100 text-gray-600',
+    awaiting_approval: 'bg-orange-100 text-orange-800',
   };
 
   return (
@@ -427,6 +420,7 @@ function EventTypeBadge({ type }: { type: string }) {
     task_completed: 'text-green-700',
     final_result: 'text-emerald-800',
     error: 'text-red-700',
+    retry: 'text-orange-700',
   };
   return (
     <span className={`shrink-0 text-xs font-semibold ${colors[type] ?? 'text-foreground'}`}>
