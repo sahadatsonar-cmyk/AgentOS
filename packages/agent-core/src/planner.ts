@@ -10,15 +10,12 @@ export interface Planner {
 
 /**
  * Rule-based planner (no LLM required).
- * Creates a practical task breakdown from the goal text.
- * Later: LLMPlanner will call Grok/OpenAI when keys are present.
  */
 export class HeuristicPlanner implements Planner {
   async createPlan(goal: string): Promise<Plan> {
     const g = goal.toLowerCase();
     const tasks: Plan['tasks'] = [];
 
-    // Math / calculator goals (check first)
     const hasMathExpr = /[0-9]+\s*[+\-*/×÷%]\s*[0-9]+/.test(goal);
     const isMathGoal =
       hasMathExpr ||
@@ -49,7 +46,6 @@ export class HeuristicPlanner implements Planner {
       return { goal, tasks };
     }
 
-    // Always start with understanding
     tasks.push({
       id: 'T1',
       title: 'Clarify goal and success criteria',
@@ -58,7 +54,6 @@ export class HeuristicPlanner implements Planner {
       tools: [],
     });
 
-    // Research-style goals
     if (/(research|summar|compare|list|find|search|what is|benefits|pros|cons)/i.test(g)) {
       tasks.push({
         id: 'T2',
@@ -81,9 +76,7 @@ export class HeuristicPlanner implements Planner {
         dependencies: ['T3'],
         tools: [],
       });
-    }
-    // Time / datetime goals
-    else if (/(time|date|timezone|clock|now|today|utc)/i.test(g)) {
+    } else if (/(time|date|timezone|clock|now|today|utc)/i.test(g)) {
       tasks.push({
         id: 'T2',
         title: 'Get current date/time',
@@ -98,9 +91,7 @@ export class HeuristicPlanner implements Planner {
         dependencies: ['T2'],
         tools: [],
       });
-    }
-    // URL fetch goals
-    else if (/https?:\/\//i.test(goal) || /(fetch|scrape|download page|read url)/i.test(g)) {
+    } else if (/https?:\/\//i.test(goal) || /(fetch|scrape|download page|read url)/i.test(g)) {
       tasks.push({
         id: 'T2',
         title: 'Fetch URL content',
@@ -115,33 +106,35 @@ export class HeuristicPlanner implements Planner {
         dependencies: ['T2'],
         tools: [],
       });
-    }
-    // Coding-style goals
-    else if (/(code|implement|build|fix|bug|api|function|refactor|test)/i.test(g)) {
+    } else if (
+      /(code|implement|build|fix|bug|api|function|refactor|test|github|repo|pull request|pr\b)/i.test(
+        g,
+      )
+    ) {
       tasks.push({
         id: 'T2',
-        title: 'Design approach',
-        description: 'Outline the steps, files, and constraints for the coding task.',
+        title: 'Inspect repository context',
+        description:
+          'List relevant paths or read key files (GitHub tools if token configured).',
         dependencies: ['T1'],
-        tools: [],
+        tools: ['github_list_dir'],
       });
       tasks.push({
         id: 'T3',
-        title: 'Implement solution',
-        description: 'Write or modify the code needed to achieve the goal.',
+        title: 'Analyze code / design approach',
+        description: 'Static analysis and implementation plan for the coding goal.',
         dependencies: ['T2'],
-        tools: ['code'],
+        tools: ['code_analyze', 'propose_patch'],
       });
       tasks.push({
         id: 'T4',
         title: 'Verify and document',
-        description: 'Check the result and note how to use or test it.',
+        description:
+          'Summarize findings, proposed patch, and next steps (tests, PR). Shell is sandboxed.',
         dependencies: ['T3'],
-        tools: [],
+        tools: ['shell'],
       });
-    }
-    // Generic fallback
-    else {
+    } else {
       tasks.push({
         id: 'T2',
         title: 'Break goal into actionable steps',
