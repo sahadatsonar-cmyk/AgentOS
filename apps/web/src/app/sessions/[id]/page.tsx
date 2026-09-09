@@ -11,6 +11,8 @@ type Task = {
   status: string;
   retryCount: number;
   result?: unknown;
+  error?: string | null;
+  tools?: string[];
 };
 
 type AgentEvent = {
@@ -20,12 +22,22 @@ type AgentEvent = {
   createdAt: string;
 };
 
+type SessionResult = {
+  message?: string;
+  answers?: string[];
+  goal?: string;
+  taskCount?: number;
+  tasks?: string[];
+  toolOutputs?: Array<{ taskId: string; tool: string; preview: string }>;
+  availableTools?: string[];
+};
+
 type SessionDetail = {
   id: string;
   goal: string;
   status: string;
   plan: unknown;
-  result: unknown;
+  result: SessionResult | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -41,6 +53,8 @@ export default function SessionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showRawResult, setShowRawResult] = useState(false);
+  const [showAllEvents, setShowAllEvents] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -98,7 +112,18 @@ export default function SessionDetailPage() {
 
   const canRun =
     !running &&
-    (session.status === 'idle' || session.status === 'failed');
+    ['idle', 'failed', 'completed'].includes(session.status);
+
+  const runLabel = running
+    ? 'Running…'
+    : session.status === 'idle'
+      ? 'Run Agent'
+      : 'Re-run Agent';
+
+  const result = session.result;
+  const answers = result?.answers?.filter(Boolean) ?? [];
+  const primaryMessage = result?.message;
+  const events = showAllEvents ? session.events : session.events.slice(0, 12);
 
   return (
     <div className="min-h-screen bg-background">
@@ -118,10 +143,13 @@ export default function SessionDetailPage() {
 
       <main className="container mx-auto max-w-4xl px-4 py-8">
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-bold leading-snug">{session.goal}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Created {new Date(session.createdAt).toLocaleString()}
+              {session.updatedAt !== session.createdAt && (
+                <> · Updated {new Date(session.updatedAt).toLocaleString()}</>
+              )}
             </p>
           </div>
           <StatusBadge status={session.status} />
@@ -133,7 +161,7 @@ export default function SessionDetailPage() {
           </div>
         )}
 
-        {/* Run controls */}
+        {/* Controls */}
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -141,11 +169,7 @@ export default function SessionDetailPage() {
             disabled={!canRun}
             className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-medium text-primary-foreground disabled:opacity-50"
           >
-            {running
-              ? 'Running…'
-              : session.status === 'completed'
-                ? 'Completed'
-                : 'Run Agent'}
+            {runLabel}
           </button>
           <button
             type="button"
@@ -154,14 +178,48 @@ export default function SessionDetailPage() {
           >
             Refresh
           </button>
+          <Link
+            href="/sessions/new"
+            className="inline-flex h-10 items-center justify-center rounded-md border border-input px-4 text-sm font-medium"
+          >
+            New Task
+          </Link>
           {running && (
-            <span className="text-sm text-muted-foreground">Planning & executing tasks…</span>
+            <span className="text-sm text-muted-foreground animate-pulse">
+              Planning & executing…
+            </span>
           )}
         </div>
 
+        {/* Answer card */}
+        {(primaryMessage || answers.length > 0) && session.status === 'completed' && (
+          <section className="mt-8 rounded-xl border bg-card p-5 shadow-sm">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Answer
+            </h2>
+            <div className="mt-3 space-y-3 text-base leading-relaxed">
+              {answers.length > 0 ? (
+                answers.map((a, i) => (
+                  <p key={i} className="whitespace-pre-wrap">
+                    {a}
+                  </p>
+                ))
+              ) : (
+                <p className="whitespace-pre-wrap">{primaryMessage}</p>
+              )}
+            </div>
+          </section>
+        )}
+
         {/* Tasks */}
         <section className="mt-10">
-          <h2 className="text-lg font-semibold">Tasks</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Tasks</h2>
+            <span className="text-xs text-muted-foreground">
+              {session.tasks.filter((t) => t.status === 'completed').length}/
+              {session.tasks.length} done
+            </span>
+          </div>
           {session.tasks.length === 0 ? (
             <p className="mt-3 text-sm text-muted-foreground">
               No tasks yet. Click <strong>Run Agent</strong> to create a plan.
@@ -171,52 +229,98 @@ export default function SessionDetailPage() {
               {session.tasks.map((t, i) => (
                 <li
                   key={t.id}
-                  className="flex items-center gap-3 rounded-md border px-4 py-3"
+                  className="rounded-md border px-4 py-3"
                 >
-                  <span className="text-xs text-muted-foreground">{i + 1}</span>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium">{t.title}</p>
-                    {t.description && (
-                      <p className="text-sm text-muted-foreground">{t.description}</p>
-                    )}
+                  <div className="flex items-start gap-3">
+                    <span className="mt-0.5 text-xs text-muted-foreground">{i + 1}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium">{t.title}</p>
+                        {t.tools && t.tools.length > 0 && (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                            {t.tools.join(', ')}
+                          </span>
+                        )}
+                      </div>
+                      {t.description && (
+                        <p className="mt-0.5 text-sm text-muted-foreground">{t.description}</p>
+                      )}
+                      {t.error && (
+                        <p className="mt-1 text-xs text-destructive">{t.error}</p>
+                      )}
+                    </div>
+                    <StatusBadge status={t.status} />
                   </div>
-                  <StatusBadge status={t.status} />
                 </li>
               ))}
             </ul>
           )}
         </section>
 
-        {/* Final result */}
-        {session.result != null && (
+        {/* Tool outputs */}
+        {result?.toolOutputs && result.toolOutputs.length > 0 && (
           <section className="mt-10">
-            <h2 className="text-lg font-semibold">Result</h2>
-            <pre className="mt-3 overflow-x-auto rounded-md border bg-muted/40 p-4 text-xs">
-              {JSON.stringify(session.result, null, 2)}
-            </pre>
+            <h2 className="text-lg font-semibold">Tool outputs</h2>
+            <ul className="mt-3 space-y-2">
+              {result.toolOutputs.map((o, i) => (
+                <li key={i} className="rounded-md border px-4 py-3 text-sm">
+                  <span className="font-medium text-indigo-700">{o.tool}</span>
+                  <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all text-xs text-muted-foreground">
+                    {o.preview}
+                  </pre>
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 
-        {/* Events */}
+        {/* Raw JSON (collapsed) */}
+        {session.result != null && (
+          <section className="mt-8">
+            <button
+              type="button"
+              onClick={() => setShowRawResult((v) => !v)}
+              className="text-sm font-medium text-muted-foreground hover:text-foreground"
+            >
+              {showRawResult ? '▾ Hide raw result' : '▸ Show raw result JSON'}
+            </button>
+            {showRawResult && (
+              <pre className="mt-2 overflow-x-auto rounded-md border bg-muted/40 p-4 text-xs">
+                {JSON.stringify(session.result, null, 2)}
+              </pre>
+            )}
+          </section>
+        )}
+
+        {/* Activity */}
         <section className="mt-10">
-          <h2 className="text-lg font-semibold">Activity</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Activity</h2>
+            {session.events.length > 12 && (
+              <button
+                type="button"
+                onClick={() => setShowAllEvents((v) => !v)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                {showAllEvents ? 'Show less' : `Show all (${session.events.length})`}
+              </button>
+            )}
+          </div>
           {session.events.length === 0 ? (
             <p className="mt-3 text-sm text-muted-foreground">No events yet.</p>
           ) : (
-            <ul className="mt-3 space-y-2">
-              {session.events.map((ev) => (
+            <ul className="mt-3 space-y-1.5">
+              {events.map((ev) => (
                 <li
                   key={ev.id}
-                  className="flex items-start gap-3 rounded-md border px-4 py-2 text-sm"
+                  className="flex items-start gap-3 rounded-md border px-3 py-2 text-sm"
                 >
-                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                     {new Date(ev.createdAt).toLocaleTimeString()}
                   </span>
-                  <span className="font-medium">{ev.type}</span>
-                  <span className="break-all text-muted-foreground">
-                    {typeof ev.data === 'object' && ev.data !== null
-                      ? JSON.stringify(ev.data)
-                      : String(ev.data)}
+                  <EventTypeBadge type={ev.type} />
+                  <span className="min-w-0 flex-1 break-all text-xs text-muted-foreground">
+                    {formatEventData(ev.type, ev.data)}
                   </span>
                 </li>
               ))}
@@ -248,4 +352,40 @@ function StatusBadge({ status }: { status: string }) {
       {status}
     </span>
   );
+}
+
+function EventTypeBadge({ type }: { type: string }) {
+  const colors: Record<string, string> = {
+    status: 'text-slate-700',
+    tool_call: 'text-indigo-700',
+    tool_result: 'text-violet-700',
+    task_started: 'text-amber-700',
+    task_completed: 'text-green-700',
+    final_result: 'text-emerald-800',
+    error: 'text-red-700',
+  };
+  return (
+    <span className={`shrink-0 text-xs font-semibold ${colors[type] ?? 'text-foreground'}`}>
+      {type}
+    </span>
+  );
+}
+
+function formatEventData(type: string, data: unknown): string {
+  if (data == null) return '';
+  if (typeof data !== 'object') return String(data);
+  const d = data as Record<string, unknown>;
+  if (type === 'status' && d.message) return String(d.message);
+  if (type === 'task_started' && d.title) return String(d.title);
+  if (type === 'task_completed' && d.title) {
+    return `${d.title}${d.ok === false ? ' (failed)' : ''}`;
+  }
+  if (type === 'tool_call' && d.tool) return String(d.tool);
+  if (type === 'tool_result') {
+    const parts = [d.tool, d.ok === false ? 'failed' : 'ok', d.preview].filter(Boolean);
+    return parts.map(String).join(' · ').slice(0, 200);
+  }
+  if (type === 'final_result' && d.message) return String(d.message).slice(0, 200);
+  if (type === 'error' && d.message) return String(d.message);
+  return JSON.stringify(data).slice(0, 180);
 }
