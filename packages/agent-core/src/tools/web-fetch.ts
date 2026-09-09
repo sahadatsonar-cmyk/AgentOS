@@ -1,19 +1,17 @@
 import { z } from 'zod';
 import type { ToolDefinition } from './types';
 
-const WebFetchInput = z.object({
+const WebFetchInputSchema = z.object({
   url: z.string().url().describe('HTTP or HTTPS URL to fetch'),
-  maxBytes: z.number().int().positive().max(500_000).optional().default(100_000),
+  maxBytes: z.number().int().positive().max(500_000).optional(),
 });
 
-type WebFetchInput = z.infer<typeof WebFetchInput>;
+type WebFetchInput = {
+  url: string;
+  maxBytes?: number;
+};
 
-const BLOCKED_HOSTS = new Set([
-  'localhost',
-  '127.0.0.1',
-  '0.0.0.0',
-  '::1',
-]);
+const BLOCKED_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 
 function assertSafeUrl(raw: string): URL {
   const url = new URL(raw);
@@ -24,7 +22,6 @@ function assertSafeUrl(raw: string): URL {
   if (BLOCKED_HOSTS.has(host) || host.endsWith('.local') || host.endsWith('.internal')) {
     throw new Error('Local or internal hosts are blocked');
   }
-  // Block obvious private IP ranges (basic)
   if (
     host.startsWith('10.') ||
     host.startsWith('192.168.') ||
@@ -43,7 +40,7 @@ export const webFetchTool: ToolDefinition<
   description: 'Fetch text content from a public HTTP/HTTPS URL (size-limited)',
   version: '1.0.0',
   permissions: ['network', 'read'],
-  inputSchema: WebFetchInput,
+  inputSchema: WebFetchInputSchema,
   async execute(input) {
     const url = assertSafeUrl(input.url);
     const maxBytes = input.maxBytes ?? 100_000;
