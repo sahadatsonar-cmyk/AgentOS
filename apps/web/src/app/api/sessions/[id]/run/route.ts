@@ -161,11 +161,10 @@ export async function POST(_req: NextRequest, { params }: Params) {
       for (const toolName of task.tools) {
         let input = pickToolInput(toolName, session.goal, task.title, task.description);
 
-        // web_fetch without URL → fall back to web_search
         const resolvedToolName =
           toolName === 'web_fetch' && input === null ? 'web_search' : toolName;
 
-        if (resolvedToolName === 'web_search' && toolName === 'web_fetch') {
+        if (resolvedToolName !== toolName) {
           input = pickToolInput('web_search', session.goal, task.title, task.description);
         }
 
@@ -352,49 +351,5 @@ export async function POST(_req: NextRequest, { params }: Params) {
       },
       { status: 500 },
     );
-  }
-}
-
-const toolRegistry = createDefaultToolRegistry();
-
-function toJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
-}
-
-function pickToolInput(
-  toolName: string,
-  goal: string,
-  taskTitle: string,
-  taskDescription: string | null,
-): Record<string, unknown> | null {
-  const text = `${goal}\n${taskTitle}\n${taskDescription || ''}`;
-
-  switch (toolName) {
-    case 'web_search':
-      return { query: goal.slice(0, 300), maxResults: 5 };
-
-    case 'web_fetch': {
-      const urlMatch = text.match(/https?:\/\/[^\s"']+/i);
-      if (urlMatch) {
-        return { url: urlMatch[0], maxBytes: 80_000 };
-      }
-      return null;
-    }
-
-    case 'calculator': {
-      const exprMatch = text.match(
-        /(?:calculate|compute|math)?\s*([0-9()+\-*/.\s%]{3,})/i,
-      );
-      if (exprMatch) {
-        return { expression: exprMatch[1].trim() };
-      }
-      return null;
-    }
-
-    case 'datetime':
-      return { timezone: 'UTC' };
-
-    default:
-      return {};
   }
 }
