@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@agent-os/database';
+import { clientIp, rateLimit } from '@/lib/rate-limit';
 
 const CreateSessionSchema = z.object({
   goal: z.string().min(1, 'Goal is required').max(4000),
@@ -59,6 +60,26 @@ export async function GET() {
  */
 export async function POST(req: NextRequest) {
   try {
+    const ip = clientIp(req);
+    const rl = rateLimit({
+      key: `create-session:${ip}`,
+      limit: 20,
+      windowMs: 60_000,
+    });
+
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Try again in a minute.' },
+        {
+          status: 429,
+          headers: {
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': String(rl.resetAt),
+          },
+        },
+      );
+    }
+
     const body = await req.json();
     const parsed = CreateSessionSchema.safeParse(body);
 
@@ -70,6 +91,14 @@ export async function POST(req: NextRequest) {
     }
 
     const { goal } = parsed.data;
+
+    // Basic injection / abuse heuristics
+    if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(goal)) {
+      return NextResponse.json(
+        { error: 'Goal contains invalid control characters' },
+        { status: 400 },
+      );
+    }
 
     let user = await prisma.user.findFirst({
       where: { email: 'demo@agentos.local' },
@@ -107,7 +136,24 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ session }, { status: 201 });
+    await prisma.executionLog.create({
+      data: {
+        sessionId: session.id,
+        level: 'info',
+        message: '[audit] session created',
+        metadata: { ip, goalLength: goal.length },
+      },
+    });
+
+    return NextResponse.json(
+      { session },
+      {
+        status: 201,
+        headers: {
+          'X-RateLimit-Remaining': String(rl.remaining),
+        },
+      },
+    );
   } catch (error) {
     console.error('[POST /api/sessions]', error);
     return NextResponse.json(
