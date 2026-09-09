@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@agent-os/database';
-import { HeuristicPlanner, createDefaultToolRegistry } from '@agent-os/agent-core';
+import {
+  HeuristicPlanner,
+  createDefaultToolRegistry,
+  generateFinalAnswer,
+} from '@agent-os/agent-core';
 
 type Params = { params: { id: string } };
 
@@ -80,9 +84,15 @@ function extractAnswerPreview(toolName: string, data: unknown): string | null {
   return null;
 }
 
+function toolSummaryLine(tool: string, data: unknown): string {
+  const preview = extractAnswerPreview(tool, data);
+  if (preview) return `[${tool}] ${preview}`;
+  return `[${tool}] ${JSON.stringify(data).slice(0, 280)}`;
+}
+
 /**
  * POST /api/sessions/:id/run
- * Plan + execute. Supports re-run for idle / failed / completed.
+ * Phase 4: plan + tools + LLM final answer + episodic memory.
  */
 export async function POST(_req: NextRequest, { params }: Params) {
   const sessionId = params.id;
@@ -189,6 +199,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
 
     const toolOutputs: Array<{ taskId: string; tool: string; result: unknown }> = [];
     const answerParts: string[] = [];
+    const toolSummaries: string[] = [];
 
     for (const task of dbTasks) {
       await prisma.task.update({
@@ -290,6 +301,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
             tool: resolvedToolName,
             result: toolResult.data,
           });
+          toolSummaries.push(toolSummaryLine(resolvedToolName, toolResult.data));
           const preview = extractAnswerPreview(resolvedToolName, toolResult.data);
           if (preview) answerParts.push(preview);
         }
@@ -331,11 +343,27 @@ export async function POST(_req: NextRequest, { params }: Params) {
       });
     }
 
+    // ── Phase 4: final answer (LLM if key present) ─────────────
+    await prisma.agentEvent.create({
+      data: {
+        sessionId,
+        type: 'status',
+        data: toJson({ status: 'verifying', message: 'Writing final answer…' }),
+      },
+    });
+
+    const finalAnswer = await generateFinalAnswer({
+      goal: session.goal,
+      taskTitles: dbTasks.map((t) => t.title),
+      toolSummaries,
+      rawAnswers: answerParts,
+    });
+
     const finalResult = {
-      message:
-        answerParts.length > 0
-          ? answerParts.join('\n\n')
-          : 'Plan executed with Phase 3 tools where assigned.',
+      message: finalAnswer.text,
+      answerSource: finalAnswer.source,
+      llmProvider: finalAnswer.provider ?? null,
+      llmModel: finalAnswer.model ?? null,
       goal: session.goal,
       answers: answerParts,
       taskCount: dbTasks.length,
@@ -348,6 +376,35 @@ export async function POST(_req: NextRequest, { params }: Params) {
       availableTools: toolRegistry.names(),
     };
 
+    // Episodic memory — store summary for later retrieval
+    await prisma.memory.create({
+      data: {
+        userId: session.userId,
+        sessionId,
+        type: 'episodic',
+        content: finalAnswer.text.slice(0, 4000),
+        importance: 0.7,
+        metadata: toJson({
+          goal: session.goal,
+          answerSource: finalAnswer.source,
+          taskCount: dbTasks.length,
+          toolsUsed: toolOutputs.map((o) => o.tool),
+        }),
+      },
+    });
+
+    // Working memory — short goal ↔ answer pair
+    await prisma.memory.create({
+      data: {
+        userId: session.userId,
+        sessionId,
+        type: 'working',
+        content: `Goal: ${session.goal}\nAnswer: ${finalAnswer.text.slice(0, 500)}`,
+        importance: 0.5,
+        metadata: toJson({ kind: 'session_summary' }),
+      },
+    });
+
     await prisma.session.update({
       where: { id: sessionId },
       data: {
@@ -359,14 +416,21 @@ export async function POST(_req: NextRequest, { params }: Params) {
       data: {
         sessionId,
         type: 'final_result',
-        data: toJson(finalResult),
+        data: toJson({
+          message: finalAnswer.text.slice(0, 500),
+          source: finalAnswer.source,
+          provider: finalAnswer.provider,
+        }),
       },
     });
     await prisma.agentEvent.create({
       data: {
         sessionId,
         type: 'status',
-        data: toJson({ status: 'completed', message: 'Agent finished' }),
+        data: toJson({
+          status: 'completed',
+          message: `Agent finished (${finalAnswer.source})`,
+        }),
       },
     });
 
