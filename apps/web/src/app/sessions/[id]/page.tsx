@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
@@ -25,6 +25,7 @@ type AgentEvent = {
 type SessionResult = {
   message?: string;
   answers?: string[];
+  answerSource?: string;
   goal?: string;
   taskCount?: number;
   tasks?: string[];
@@ -52,9 +53,12 @@ export default function SessionDetailPage() {
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [live, setLive] = useState(false);
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showRawResult, setShowRawResult] = useState(false);
   const [showAllEvents, setShowAllEvents] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -74,10 +78,60 @@ export default function SessionDetailPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    return () => {
+      esRef.current?.close();
+      esRef.current = null;
+    };
+  }, []);
+
+  function startLiveStream() {
+    esRef.current?.close();
+    const es = new EventSource(`/api/sessions/${id}/stream`);
+    esRef.current = es;
+    setLive(true);
+
+    es.addEventListener('hello', () => {
+      setLiveStatus('connected');
+    });
+
+    es.addEventListener('session', (e) => {
+      try {
+        const data = JSON.parse((e as MessageEvent).data) as {
+          status?: string;
+        };
+        if (data.status) setLiveStatus(data.status);
+      } catch {
+        // ignore
+      }
+    });
+
+    es.addEventListener('agent_event', () => {
+      // Refresh full session when new events arrive
+      void load();
+    });
+
+    es.addEventListener('done', () => {
+      setLive(false);
+      setLiveStatus(null);
+      es.close();
+      esRef.current = null;
+      void load();
+    });
+
+    es.onerror = () => {
+      setLive(false);
+      setLiveStatus(null);
+      es.close();
+      esRef.current = null;
+    };
+  }
+
   async function handleRun() {
     if (!session || running) return;
     setRunning(true);
     setError(null);
+    startLiveStream();
     try {
       const res = await fetch(`/api/sessions/${id}/run`, { method: 'POST' });
       const data = await res.json();
@@ -88,6 +142,10 @@ export default function SessionDetailPage() {
       await load();
     } finally {
       setRunning(false);
+      // Keep stream briefly so final events flush, then reload
+      setTimeout(() => {
+        void load();
+      }, 800);
     }
   }
 
@@ -152,7 +210,15 @@ export default function SessionDetailPage() {
               )}
             </p>
           </div>
-          <StatusBadge status={session.status} />
+          <div className="flex flex-col items-end gap-1">
+            <StatusBadge status={session.status} />
+            {live && (
+              <span className="flex items-center gap-1.5 text-[11px] text-emerald-700">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                live{liveStatus ? ` · ${liveStatus}` : ''}
+              </span>
+            )}
+          </div>
         </div>
 
         {(error || session.error) && (
@@ -161,7 +227,6 @@ export default function SessionDetailPage() {
           </div>
         )}
 
-        {/* Controls */}
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -191,27 +256,32 @@ export default function SessionDetailPage() {
           )}
         </div>
 
-        {/* Answer card */}
         {(primaryMessage || answers.length > 0) && session.status === 'completed' && (
           <section className="mt-8 rounded-xl border bg-card p-5 shadow-sm">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Answer
-            </h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Answer
+              </h2>
+              {result?.answerSource && (
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  via {result.answerSource}
+                </span>
+              )}
+            </div>
             <div className="mt-3 space-y-3 text-base leading-relaxed">
-              {answers.length > 0 ? (
+              {primaryMessage ? (
+                <p className="whitespace-pre-wrap">{primaryMessage}</p>
+              ) : (
                 answers.map((a, i) => (
                   <p key={i} className="whitespace-pre-wrap">
                     {a}
                   </p>
                 ))
-              ) : (
-                <p className="whitespace-pre-wrap">{primaryMessage}</p>
               )}
             </div>
           </section>
         )}
 
-        {/* Tasks */}
         <section className="mt-10">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Tasks</h2>
@@ -227,10 +297,7 @@ export default function SessionDetailPage() {
           ) : (
             <ul className="mt-3 space-y-2">
               {session.tasks.map((t, i) => (
-                <li
-                  key={t.id}
-                  className="rounded-md border px-4 py-3"
-                >
+                <li key={t.id} className="rounded-md border px-4 py-3">
                   <div className="flex items-start gap-3">
                     <span className="mt-0.5 text-xs text-muted-foreground">{i + 1}</span>
                     <div className="min-w-0 flex-1">
@@ -257,7 +324,6 @@ export default function SessionDetailPage() {
           )}
         </section>
 
-        {/* Tool outputs */}
         {result?.toolOutputs && result.toolOutputs.length > 0 && (
           <section className="mt-10">
             <h2 className="text-lg font-semibold">Tool outputs</h2>
@@ -274,7 +340,6 @@ export default function SessionDetailPage() {
           </section>
         )}
 
-        {/* Raw JSON (collapsed) */}
         {session.result != null && (
           <section className="mt-8">
             <button
@@ -292,7 +357,6 @@ export default function SessionDetailPage() {
           </section>
         )}
 
-        {/* Activity */}
         <section className="mt-10">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Activity</h2>
