@@ -6,10 +6,28 @@ const CreateSessionSchema = z.object({
   goal: z.string().min(1, 'Goal is required').max(4000),
 });
 
+function dbErrorMessage(error: unknown): string {
+  if (!process.env.DATABASE_URL) {
+    return 'DATABASE_URL is not set on the server. Add it in Vercel → Settings → Environment Variables.';
+  }
+  if (error instanceof Error) {
+    const msg = error.message;
+    if (msg.includes("Can't reach database") || msg.includes('P1001')) {
+      return 'Cannot reach Supabase. Check DATABASE_URL (use pooler port 6543 with pgbouncer=true).';
+    }
+    if (msg.includes('P1000') || msg.includes('Authentication failed')) {
+      return 'Database authentication failed. Check password in DATABASE_URL.';
+    }
+    if (msg.includes('P2021') || msg.includes('does not exist')) {
+      return 'Tables missing. Run: npx prisma db push against Supabase.';
+    }
+    return msg.slice(0, 300);
+  }
+  return 'Failed to create session';
+}
+
 /**
  * GET /api/sessions
- * List recent sessions (newest first).
- * V1: no auth yet — returns all sessions. Auth will scope by userId later.
  */
 export async function GET() {
   try {
@@ -30,7 +48,7 @@ export async function GET() {
   } catch (error) {
     console.error('[GET /api/sessions]', error);
     return NextResponse.json(
-      { error: 'Failed to list sessions' },
+      { error: dbErrorMessage(error) },
       { status: 500 },
     );
   }
@@ -38,7 +56,6 @@ export async function GET() {
 
 /**
  * POST /api/sessions
- * Create a new agent session from a natural-language goal.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -54,7 +71,6 @@ export async function POST(req: NextRequest) {
 
     const { goal } = parsed.data;
 
-    // V1: ensure a demo user exists (auth comes later)
     let user = await prisma.user.findFirst({
       where: { email: 'demo@agentos.local' },
     });
@@ -83,7 +99,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Log initial event
     await prisma.agentEvent.create({
       data: {
         sessionId: session.id,
@@ -96,7 +111,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error('[POST /api/sessions]', error);
     return NextResponse.json(
-      { error: 'Failed to create session' },
+      { error: dbErrorMessage(error) },
       { status: 500 },
     );
   }
