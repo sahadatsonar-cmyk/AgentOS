@@ -15,12 +15,16 @@ export interface ToolResult<T = unknown> {
   durationMs: number;
 }
 
+/**
+ * TInput = parsed output type (after defaults).
+ * inputSchema accepts Zod effects/defaults where _input may differ from output.
+ */
 export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   name: string;
   description: string;
   version: string;
   permissions: ToolPermission[];
-  inputSchema: z.ZodType<TInput>;
+  inputSchema: z.ZodType<TInput, z.ZodTypeDef, unknown>;
   execute: (input: TInput, ctx: ToolContext) => Promise<TOutput>;
 }
 
