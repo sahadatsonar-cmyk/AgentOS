@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@agent-os/database';
 import { HeuristicPlanner, createDefaultToolRegistry } from '@agent-os/agent-core';
 
@@ -101,7 +101,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Session was cancelled' }, { status: 400 });
     }
 
-    // Block concurrent runs
     if (['planning', 'executing', 'analyzing'].includes(session.status)) {
       return NextResponse.json(
         { error: 'Session is already running' },
@@ -111,19 +110,26 @@ export async function POST(_req: NextRequest, { params }: Params) {
 
     const isRerun = session.status === 'completed' || session.status === 'failed';
 
-    // Reset previous run state for re-run
     if (isRerun) {
       await prisma.toolCall.deleteMany({ where: { sessionId } });
       await prisma.task.deleteMany({ where: { sessionId } });
       await prisma.session.update({
         where: { id: sessionId },
-        data: { status: 'idle', plan: Prisma.DbNull, result: Prisma.DbNull, error: null },
+        data: {
+          status: 'idle',
+          plan: Prisma.DbNull,
+          result: Prisma.DbNull,
+          error: null,
+        },
       });
       await prisma.agentEvent.create({
         data: {
           sessionId,
           type: 'status',
-          data: toJson({ status: 'idle', message: 'Re-run requested — previous plan cleared' }),
+          data: toJson({
+            status: 'idle',
+            message: 'Re-run requested — previous plan cleared',
+          }),
         },
       });
     }
@@ -143,7 +149,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
     const planner = new HeuristicPlanner();
     const plan = await planner.createPlan(session.goal);
 
-    // Clear any leftover tasks (idle re-run path)
     await prisma.task.deleteMany({ where: { sessionId } });
 
     await prisma.task.createMany({
