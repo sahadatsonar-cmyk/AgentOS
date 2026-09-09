@@ -5,3 +5,4 @@ export * from './orchestrator';
 export * from './tools';
 export * from './llm';
 export * from './queue';
+export * from './recovery';
