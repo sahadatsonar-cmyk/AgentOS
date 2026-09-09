@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { SiteHeader } from '@/components/site-header';
 
 type SessionItem = {
   id: string;
@@ -34,52 +35,37 @@ export default function SessionsPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold">
-              A
-            </div>
-            <span className="text-xl font-semibold">AgentOS</span>
-          </Link>
-          <Link
-            href="/sessions/new"
-            className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground"
-          >
+    <div className="min-h-screen">
+      <SiteHeader />
+
+      <main className="container mx-auto px-4 py-10">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Sessions</h1>
+            <p className="mt-2 text-muted-foreground">
+              Active and past agent runs.
+            </p>
+          </div>
+          <Link href="/sessions/new" className="btn-primary">
             New Task
           </Link>
         </div>
-      </header>
-
-      <main className="container mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold">Sessions</h1>
-        <p className="mt-2 text-muted-foreground">
-          Active and past agent sessions.
-        </p>
 
         {loading && (
-          <div className="mt-8 text-center text-muted-foreground">Loading…</div>
+          <div className="mt-12 text-center text-muted-foreground">Loading…</div>
         )}
 
         {error && (
-          <div className="mt-8 rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div className="mt-8 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {error}
-            <p className="mt-1 text-xs opacity-80">
-              Make sure PostgreSQL is running and DATABASE_URL is set, then run{' '}
-              <code className="rounded bg-muted px-1">pnpm db:push</code>
-            </p>
           </div>
         )}
 
         {!loading && !error && sessions.length === 0 && (
-          <div className="mt-8 rounded-lg border border-dashed p-12 text-center">
+          <div className="card-soft mt-10 border-dashed p-12 text-center">
             <p className="text-muted-foreground">No sessions yet.</p>
-            <Link
-              href="/sessions/new"
-              className="mt-4 inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-medium text-primary-foreground"
-            >
-              Create your first agent task
+            <Link href="/sessions/new" className="btn-primary mt-6">
+              Create your first task
             </Link>
           </div>
         )}
@@ -90,7 +76,7 @@ export default function SessionsPage() {
               <Link
                 key={s.id}
                 href={`/sessions/${s.id}`}
-                className="block rounded-lg border bg-card p-4 shadow-sm transition-colors hover:bg-accent/50"
+                className="card-soft block p-4 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-indigo-500/10"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -116,10 +102,12 @@ function StatusBadge({ status }: { status: string }) {
     idle: 'bg-slate-100 text-slate-700',
     analyzing: 'bg-blue-100 text-blue-700',
     planning: 'bg-indigo-100 text-indigo-700',
-    executing: 'bg-amber-100 text-amber-700',
-    completed: 'bg-green-100 text-green-700',
+    executing: 'bg-amber-100 text-amber-800',
+    verifying: 'bg-violet-100 text-violet-800',
+    completed: 'bg-emerald-100 text-emerald-800',
     failed: 'bg-red-100 text-red-700',
     cancelled: 'bg-gray-100 text-gray-600',
+    awaiting_approval: 'bg-orange-100 text-orange-800',
   };
 
   return (
