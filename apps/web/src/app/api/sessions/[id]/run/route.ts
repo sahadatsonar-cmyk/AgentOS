@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@agent-os/database';
 import { HeuristicPlanner, createDefaultToolRegistry } from '@agent-os/agent-core';
 
@@ -6,12 +7,16 @@ type Params = { params: { id: string } };
 
 const toolRegistry = createDefaultToolRegistry();
 
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
 function pickToolInput(
   toolName: string,
   goal: string,
   taskTitle: string,
   taskDescription: string | null,
-): unknown {
+): Record<string, unknown> | null {
   const text = `${goal}\n${taskTitle}\n${taskDescription || ''}`;
 
   switch (toolName) {
@@ -75,7 +80,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
       );
     }
 
-    // ── planning ──────────────────────────────────────────────
     await prisma.session.update({
       where: { id: sessionId },
       data: { status: 'planning' },
@@ -84,7 +88,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
       data: {
         sessionId,
         type: 'status',
-        data: { status: 'planning', message: 'Creating plan…' },
+        data: toJson({ status: 'planning', message: 'Creating plan…' }),
       },
     });
 
@@ -110,23 +114,22 @@ export async function POST(_req: NextRequest, { params }: Params) {
       where: { id: sessionId },
       data: {
         status: 'executing',
-        plan: plan as object,
+        plan: toJson(plan),
       },
     });
     await prisma.agentEvent.create({
       data: {
         sessionId,
         type: 'status',
-        data: {
+        data: toJson({
           status: 'executing',
           message: `Plan ready with ${plan.tasks.length} tasks`,
           taskCount: plan.tasks.length,
           availableTools: toolRegistry.names(),
-        },
+        }),
       },
     });
 
-    // ── execute with tools ────────────────────────────────────
     const dbTasks = await prisma.task.findMany({
       where: { sessionId },
       orderBy: { sortOrder: 'asc' },
@@ -143,7 +146,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         data: {
           sessionId,
           type: 'task_started',
-          data: { taskId: task.id, title: task.title, tools: task.tools },
+          data: toJson({ taskId: task.id, title: task.title, tools: task.tools }),
         },
       });
 
@@ -158,7 +161,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
       for (const toolName of task.tools) {
         let input = pickToolInput(toolName, session.goal, task.title, task.description);
 
-        // If web_fetch had no URL, fall back to web_search
         if (toolName === 'web_fetch' && input === null) {
           input = pickToolInput('web_search', session.goal, task.title, task.description);
           const searchResult = await toolRegistry.execute('web_search', input, {
@@ -171,9 +173,9 @@ export async function POST(_req: NextRequest, { params }: Params) {
               sessionId,
               taskId: task.id,
               toolName: 'web_search',
-              input: (input ?? {}) as object,
+              input: toJson(input ?? {}),
               status: searchResult.ok ? 'completed' : 'failed',
-              output: searchResult.ok ? (searchResult.data as object) : undefined,
+              output: searchResult.ok ? toJson(searchResult.data) : undefined,
               error: searchResult.error,
               durationMs: searchResult.durationMs,
             },
@@ -183,19 +185,19 @@ export async function POST(_req: NextRequest, { params }: Params) {
             data: {
               sessionId,
               type: 'tool_call',
-              data: { toolCallId: toolCall.id, tool: 'web_search', input },
+              data: toJson({ toolCallId: toolCall.id, tool: 'web_search', input }),
             },
           });
           await prisma.agentEvent.create({
             data: {
               sessionId,
               type: 'tool_result',
-              data: {
+              data: toJson({
                 toolCallId: toolCall.id,
                 tool: 'web_search',
                 ok: searchResult.ok,
                 durationMs: searchResult.durationMs,
-              },
+              }),
             },
           });
 
@@ -232,9 +234,9 @@ export async function POST(_req: NextRequest, { params }: Params) {
             sessionId,
             taskId: task.id,
             toolName,
-            input: (input ?? {}) as object,
+            input: toJson(input),
             status: toolResult.ok ? 'completed' : 'failed',
-            output: toolResult.ok ? (toolResult.data as object) : undefined,
+            output: toolResult.ok ? toJson(toolResult.data) : undefined,
             error: toolResult.error,
             durationMs: toolResult.durationMs,
           },
@@ -244,14 +246,14 @@ export async function POST(_req: NextRequest, { params }: Params) {
           data: {
             sessionId,
             type: 'tool_call',
-            data: { toolCallId: toolCall.id, tool: toolName, input },
+            data: toJson({ toolCallId: toolCall.id, tool: toolName, input }),
           },
         });
         await prisma.agentEvent.create({
           data: {
             sessionId,
             type: 'tool_result',
-            data: {
+            data: toJson({
               toolCallId: toolCall.id,
               tool: toolName,
               ok: toolResult.ok,
@@ -259,7 +261,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
               preview: toolResult.ok
                 ? JSON.stringify(toolResult.data).slice(0, 500)
                 : toolResult.error,
-            },
+            }),
           },
         });
 
@@ -289,7 +291,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
         where: { id: task.id },
         data: {
           status: taskFailed ? 'failed' : 'completed',
-          result,
+          result: toJson(result),
           error: taskFailed
             ? toolResults
                 .filter((r) => !r.ok)
@@ -302,12 +304,12 @@ export async function POST(_req: NextRequest, { params }: Params) {
         data: {
           sessionId,
           type: 'task_completed',
-          data: {
+          data: toJson({
             taskId: task.id,
             title: task.title,
             ok: !taskFailed,
             toolsUsed: toolResults.map((r) => r.tool),
-          },
+          }),
         },
       });
     }
@@ -329,21 +331,21 @@ export async function POST(_req: NextRequest, { params }: Params) {
       where: { id: sessionId },
       data: {
         status: 'completed',
-        result: finalResult,
+        result: toJson(finalResult),
       },
     });
     await prisma.agentEvent.create({
       data: {
         sessionId,
         type: 'final_result',
-        data: finalResult,
+        data: toJson(finalResult),
       },
     });
     await prisma.agentEvent.create({
       data: {
         sessionId,
         type: 'status',
-        data: { status: 'completed', message: 'Agent finished' },
+        data: toJson({ status: 'completed', message: 'Agent finished' }),
       },
     });
 
@@ -371,9 +373,9 @@ export async function POST(_req: NextRequest, { params }: Params) {
         data: {
           sessionId,
           type: 'error',
-          data: {
+          data: toJson({
             message: error instanceof Error ? error.message : 'Run failed',
-          },
+          }),
         },
       });
     } catch {
@@ -387,5 +389,49 @@ export async function POST(_req: NextRequest, { params }: Params) {
       },
       { status: 500 },
     );
+  }
+}
+
+const toolRegistry = createDefaultToolRegistry();
+
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
+function pickToolInput(
+  toolName: string,
+  goal: string,
+  taskTitle: string,
+  taskDescription: string | null,
+): Record<string, unknown> | null {
+  const text = `${goal}\n${taskTitle}\n${taskDescription || ''}`;
+
+  switch (toolName) {
+    case 'web_search':
+      return { query: goal.slice(0, 300), maxResults: 5 };
+
+    case 'web_fetch': {
+      const urlMatch = text.match(/https?:\/\/[^\s"']+/i);
+      if (urlMatch) {
+        return { url: urlMatch[0], maxBytes: 80_000 };
+      }
+      return null;
+    }
+
+    case 'calculator': {
+      const exprMatch = text.match(
+        /(?:calculate|compute|math)?\s*([0-9()+\-*/.\s%]{3,})/i,
+      );
+      if (exprMatch) {
+        return { expression: exprMatch[1].trim() };
+      }
+      return null;
+    }
+
+    case 'datetime':
+      return { timezone: 'UTC' };
+
+    default:
+      return {};
   }
 }
